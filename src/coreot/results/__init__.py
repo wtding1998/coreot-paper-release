@@ -1,0 +1,2 @@
+"""Manuscript-results artifact generation."""
+
