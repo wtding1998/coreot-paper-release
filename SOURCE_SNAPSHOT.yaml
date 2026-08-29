@@ -1,0 +1,32 @@
+schema_version: 1
+candidate_id: release-candidate-2026-08-29
+source:
+  repository: wtding1998/CoReOT
+  tag: release-candidate-2026-08-29
+  commit: 15431b1b506103abb5d4375b03d739205bf930fb
+evidence:
+  candidate: 2026-08-28-current-executable-r4
+  registry: paper-release/provenance/release.yaml
+  checksum_inventory: paper-release/provenance/checksums.sha256
+derivation:
+  base: validated candidate code tree
+  import_safe_facade: src/coreot/submission/__init__.py
+  tagged_import_closure:
+    - src/coreot/results/main_figure_external_baselines.py
+    - src/coreot/results/uot_baseline_figure_inputs.py
+    - experiments/mouse_spleen/generate_natural_reports.py
+    - experiments/pbmc_state/generate_pbmc_coreot_constant_tau_alpha_broad_grid_configs.py
+    - experiments/pbmc_state/generate_pbmc_coreot_full_tau_min_tau_max_labelwise_configs.py
+    - experiments/missing_celltype/generate_hiha_dc_coreot_constant_tau_alpha_broad_grid.py
+    - experiments/missing_celltype/generate_hiha_dc_coreot_constant_tau_alpha_broad_grid_configs.py
+    - experiments/missing_celltype/generate_hiha_dc_coreot_full_tau_min_tau_max_alpha5_grid.py
+    - experiments/missing_celltype/generate_hiha_dc_coreot_full_tau_min_tau_max_alpha5_grid_configs.py
+  celltypist_reproduction:
+    - src/coreot/submission/celltypist_promotion.py
+    - experiments/pbmc_state/rerun_pbmc_celltypist_centered.py
+    - tests/test_pbmc_celltypist_candidate.py
+boundaries:
+  includes_hdf5_family_objects: false
+  includes_untracked_working_tree_files: false
+  evidence_archive_stored_in_git: false
+  publication_authorized: false

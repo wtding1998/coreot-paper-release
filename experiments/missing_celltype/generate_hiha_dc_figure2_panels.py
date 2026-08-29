@@ -36,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("results/HIHA_DC/manuscript/figure2"),
     )
     parser.add_argument(
+        "--source-root",
+        type=Path,
+        help="Explicit retained Figure 2 source-data root; required for --panel main.",
+    )
+    parser.add_argument(
         "--overview",
         type=Path,
         default=Path(
@@ -108,10 +113,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             runs_root=args.runs_root,
         )
     else:
+        if args.source_root is None:
+            raise ValueError("--source-root is required for --panel main")
+        source_root = args.source_root.resolve()
+        output_root = args.output_root.resolve()
+        if source_root == output_root or output_root in source_root.parents:
+            raise ValueError("--source-root must be outside --output-root")
         paths = generate_main_figure(
             docs_root=args.docs_root,
             result_root=args.output_root,
-            source_root=args.output_root / "source_data",
+            source_root=args.source_root,
         )
     for path in paths.values():
         print(path)

@@ -33,7 +33,6 @@ METHOD_SCORES = (
     MethodScore(r"CoRe-OT $\widetilde{u}$", "coreot_full", "u_tilde", "internal"),
     MethodScore(r"CoRe-OT $u$", "coreot_full", "u", "internal"),
     MethodScore("Uniform UOT", "uniform_uot", "u", "internal"),
-    MethodScore("Balanced OT", "balanced_ot", "label_uncertainty", "internal"),
     MethodScore("Seurat", "seurat_anchor", "u", "external"),
     MethodScore("SingleR", "singleR", "u", "external"),
     MethodScore("CellTypist", "celltypist_l3", "u", "external"),

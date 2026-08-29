@@ -182,9 +182,8 @@ def _sorted_rows(summary: pd.DataFrame) -> pd.DataFrame:
     method_order = {
         "prior_only": 0,
         "nn": 1,
-        "balanced_ot": 2,
-        "uniform_uot": 3,
-        "coreot_constant_tau": 4,
+        "uniform_uot": 2,
+        "coreot_constant_tau": 3,
     }
     ordered["_method_order"] = ordered["method"].map(method_order).fillna(99)
     ordered = ordered.sort_values(
@@ -391,7 +390,7 @@ def render_broad_grid_report(
         "",
         "## Fixed Reference Rows",
         "",
-        "- **Fixed methods:** `prior_only`, `nn`, `balanced_ot`",
+        "- **Fixed methods:** `prior_only`, `nn`",
         f"- **Fixed reference source:** `{fixed_reference_root}`",
         "",
         "## Run Coverage",
@@ -936,7 +935,7 @@ def render_pbmc_broad_grid_report(
         "",
         "## Fixed Reference Rows",
         "",
-        "- **Fixed methods:** `prior_only`, `nn`, `balanced_ot`",
+        "- **Fixed methods:** `prior_only`, `nn`",
         f"- **Fixed reference source:** `{fixed_reference_root}`",
         "",
         "## Run Coverage",

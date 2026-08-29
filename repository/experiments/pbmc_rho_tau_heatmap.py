@@ -34,6 +34,7 @@ from experiments.component_ablation_surfaces import (  # noqa: E402
     tau_pairs,
 )
 from experiments.rho_attribution_search import (  # noqa: E402
+    RETAINED_FIT_FILES,
     _evaluate_variant,
     _pbmc_provider_rho_path,
     _run_method,
@@ -62,6 +63,27 @@ S2_ALIGNED_METRICS = (
     ("forced_accuracy", "Forced accuracy"),
     ("forced_macro_f1", "Forced macro-F1"),
 )
+
+
+def _complete_fit_artifacts(path: Path) -> bool:
+    return all((path / filename).is_file() for filename in RETAINED_FIT_FILES)
+
+
+def _complete_pair_fit_artifacts(path: Path) -> bool:
+    return all(
+        (path / variant / filename).is_file()
+        for variant in ("heterogeneous", "mean_matched_uniform")
+        for filename in RETAINED_FIT_FILES
+    )
+
+
+def _missing_pair_fit_artifacts(path: Path) -> list[str]:
+    return [
+        f"{variant}/{filename}"
+        for variant in ("heterogeneous", "mean_matched_uniform")
+        for filename in RETAINED_FIT_FILES
+        if not (path / variant / filename).is_file()
+    ]
 
 
 def relative_percent(delta: float, comparator: float) -> float:
@@ -95,7 +117,7 @@ def _load_inputs(
     source_priors = pd.read_csv(paths["source_priors"])
     target_priors = pd.read_csv(paths["target_priors"])
     truth = pd.read_csv(paths["truth"])
-    provider_path = _pbmc_provider_rho_path(runs_root, run_root, spec)
+    provider_path = _pbmc_provider_rho_path(run_root)
     metadata_path = provider_path.with_name("rho_metadata.yaml")
     provider_rho = pd.read_csv(provider_path)
     provider_metadata = yaml.safe_load(
@@ -172,6 +194,7 @@ def _run_seed(
     spec,
     seed: int,
     pbmc_condition: pd.Series,
+    retain_fit_artifacts: bool = False,
 ) -> Path:
     (
         run_root,
@@ -194,7 +217,26 @@ def _run_seed(
         "candidate_edges_sha256": candidate_hash,
         "source_priors_sha256": source_hash,
     }
+    storage = "fits" if retain_fit_artifacts else "tmp"
+
+    def fit_root(tau_min: float, tau_max: float) -> Path:
+        return (
+            output_root
+            / storage
+            / spec.slug
+            / f"seed{seed}"
+            / f"tau_min_{tau_min:g}_tau_max_{tau_max:g}"
+        )
+
     frame = _read_checkpoint(checkpoint, identity, configured)
+    if retain_fit_artifacts:
+        keep = [
+            _complete_fit_artifacts(
+                fit_root(float(row.tau_min), float(row.tau_max))
+            )
+            for row in frame.itertuples(index=False)
+        ]
+        frame = frame.loc[keep].copy()
     frame.to_csv(checkpoint, index=False)
     completed = {
         (float(row.tau_min), float(row.tau_max))
@@ -204,13 +246,11 @@ def _run_seed(
         if (tau_min, tau_max) in completed:
             continue
         local_spec = replace(spec, selected_tau=(tau_min, tau_max))
-        method_root = (
-            output_root
-            / "tmp"
-            / spec.slug
-            / f"seed{seed}"
-            / f"tau_min_{tau_min:g}_tau_max_{tau_max:g}"
-        )
+        method_root = fit_root(tau_min, tau_max)
+        if retain_fit_artifacts and method_root.exists() and not _complete_fit_artifacts(
+            method_root
+        ):
+            shutil.rmtree(method_root)
         scores, metadata, _ = _run_method(
             variant="mean_matched_uniform",
             method_root=method_root,
@@ -228,6 +268,16 @@ def _run_seed(
             scores=scores,
             pbmc_condition=pbmc_condition,
         )
+        if retain_fit_artifacts and not _complete_fit_artifacts(method_root):
+            missing = [
+                filename
+                for filename in RETAINED_FIT_FILES
+                if not (method_root / filename).is_file()
+            ]
+            raise ValueError(
+                "Retained PBMC rho-tau fit lacks artifacts "
+                f"{missing}: {method_root}"
+            )
         row = {
             **identity,
             "tau_min": tau_min,
@@ -249,7 +299,8 @@ def _run_seed(
             else pd.concat([frame, new_row], ignore_index=True)
         ).sort_values(["tau_min", "tau_max"])
         frame.to_csv(checkpoint, index=False)
-        shutil.rmtree(method_root)
+        if not retain_fit_artifacts:
+            shutil.rmtree(method_root)
     return checkpoint
 
 
@@ -644,6 +695,7 @@ def _run_direct_seed(
     seed: int,
     pbmc_condition: pd.Series,
     tau_values: Sequence[float],
+    retain_fit_artifacts: bool = False,
 ) -> Path:
     (
         run_root,
@@ -666,7 +718,26 @@ def _run_direct_seed(
         "candidate_edges_sha256": candidate_hash,
         "source_priors_sha256": source_hash,
     }
+    storage = "fits" if retain_fit_artifacts else "tmp"
+
+    def pair_root(tau_min: float, tau_max: float) -> Path:
+        return (
+            output_root
+            / storage
+            / spec.slug
+            / f"seed{seed}"
+            / f"tau_min_{tau_min:g}_tau_max_{tau_max:g}"
+        )
+
     frame = _read_paired_checkpoint(checkpoint, identity, configured)
+    if retain_fit_artifacts:
+        keep = [
+            _complete_pair_fit_artifacts(
+                pair_root(float(row.tau_min), float(row.tau_max))
+            )
+            for row in frame.itertuples(index=False)
+        ]
+        frame = frame.loc[keep].copy()
     frame.to_csv(checkpoint, index=False)
     completed = {
         (float(row.tau_min), float(row.tau_max))
@@ -678,15 +749,13 @@ def _run_direct_seed(
         local_spec = replace(spec, selected_tau=(tau_min, tau_max))
         result: dict[str, dict[str, object]] = {}
         metadata: dict[str, dict[str, object]] = {}
+        current_pair_root = pair_root(tau_min, tau_max)
+        if retain_fit_artifacts and current_pair_root.exists() and not _complete_pair_fit_artifacts(
+            current_pair_root
+        ):
+            shutil.rmtree(current_pair_root)
         for variant in ("heterogeneous", "mean_matched_uniform"):
-            method_root = (
-                output_root
-                / "tmp"
-                / spec.slug
-                / f"seed{seed}"
-                / f"tau_min_{tau_min:g}_tau_max_{tau_max:g}"
-                / variant
-            )
+            method_root = current_pair_root / variant
             scores, metadata[variant], _ = _run_method(
                 variant=variant,
                 method_root=method_root,
@@ -703,6 +772,14 @@ def _run_direct_seed(
                 truth=truth,
                 scores=scores,
                 pbmc_condition=pbmc_condition,
+            )
+        if retain_fit_artifacts and not _complete_pair_fit_artifacts(
+            current_pair_root
+        ):
+            raise ValueError(
+                "Retained PBMC rho-tau pair lacks artifacts "
+                f"{_missing_pair_fit_artifacts(current_pair_root)}: "
+                f"{current_pair_root}"
             )
         row: dict[str, object] = {
             **identity,
@@ -741,13 +818,8 @@ def _run_direct_seed(
             else pd.concat([frame, new_row], ignore_index=True)
         ).sort_values(["tau_min", "tau_max"])
         frame.to_csv(checkpoint, index=False)
-        shutil.rmtree(
-            output_root
-            / "tmp"
-            / spec.slug
-            / f"seed{seed}"
-            / f"tau_min_{tau_min:g}_tau_max_{tau_max:g}"
-        )
+        if not retain_fit_artifacts:
+            shutil.rmtree(current_pair_root)
     return checkpoint
 
 
@@ -763,6 +835,7 @@ def _run_direct_grid(
     table_stem: str,
     figure_name: str,
     progress_label: str,
+    retain_fit_artifacts: bool = False,
 ) -> tuple[Path, Path, Path]:
     output_root = (
         project_root
@@ -785,6 +858,7 @@ def _run_direct_grid(
                 seed=seed,
                 pbmc_condition=condition,
                 tau_values=tau_values,
+                retain_fit_artifacts=retain_fit_artifacts,
             ): (spec.endpoint, seed)
             for spec, seed in tasks
         }
@@ -855,6 +929,7 @@ def run_expanded(
     runs_root: Path,
     jobs: int,
     pbmc_raw_path: Path,
+    retain_fit_artifacts: bool = False,
 ) -> tuple[Path, Path, Path]:
     return _run_direct_grid(
         project_root=project_root,
@@ -867,6 +942,7 @@ def run_expanded(
         table_stem="rho_tau_surface_expanded",
         figure_name="manuscript_fig_pbmc_rho_tau_surface_alpha0_expanded.png",
         progress_label="expanded PBMC",
+        retain_fit_artifacts=retain_fit_artifacts,
     )
 
 
@@ -876,6 +952,7 @@ def run_focused(
     runs_root: Path,
     jobs: int,
     pbmc_raw_path: Path,
+    retain_fit_artifacts: bool = False,
 ) -> tuple[Path, Path, Path, Path]:
     output_name = "rho_attribution_tau_surface_alpha0_range075_175"
     _run_direct_grid(
@@ -891,8 +968,42 @@ def run_focused(
             "manuscript_fig_pbmc_rho_tau_surface_alpha0_range075_175.png"
         ),
         progress_label="focused PBMC",
+        retain_fit_artifacts=retain_fit_artifacts,
     )
     return aggregate_focused(project_root=project_root)
+
+
+def _focused_caption_text() -> str:
+    return (
+        "**PBMC matchability-penalty attribution at fixed "
+        "$\\alpha=0$.** Rows show paired relative heterogeneous-minus-mean-"
+        "matched-uniform differences (%) in AP, AUROC, represented-state "
+        "forced accuracy, and represented-state forced macro-F1; columns "
+        "show the B-cell, NK-cell, and dendritic-cell endpoints. For metric "
+        "$M$, each split-level value is "
+        "$100(M_{\\mathrm{heterogeneous}}-M_{\\mathrm{uniform}})/"
+        "M_{\\mathrm{uniform}}$, and each displayed cell is the arithmetic "
+        "mean across five donor splits. Positive "
+        "values favor the heterogeneous query penalty, and negative "
+        "values favor the mean-matched uniform comparator. The vertical "
+        "and horizontal axes show $\\tau_{\\min}$ and $\\tau_{\\max}$, "
+        "respectively, with "
+        "$\\tau_{\\min}\\leq\\tau_{\\max}$. Diagonal cells are zero "
+        "because the two penalties coincide. Color scales are centered at "
+        "zero and shared across endpoints within each metric but differ "
+        "across metrics. Corresponding absolute differences are retained "
+        "as scale context in Supplementary Data 3.\n"
+    )
+
+
+def _write_focused_caption(*, project_root: Path) -> Path:
+    caption_path = (
+        project_root
+        / "docs/figs/"
+        "manuscript_fig_pbmc_rho_tau_surface_alpha0_range075_175_caption.md"
+    )
+    caption_path.write_text(_focused_caption_text(), encoding="utf-8")
+    return caption_path
 
 
 def aggregate_focused(
@@ -941,34 +1052,7 @@ def aggregate_focused(
         figure_path,
         tau_values=FOCUSED_TAU_VALUES,
     )
-    caption_path = (
-        project_root
-        / "docs/figs/"
-        "manuscript_fig_pbmc_rho_tau_surface_alpha0_range075_175_caption.md"
-    )
-    caption_path.write_text(
-        (
-            "**PBMC matchability-penalty attribution at fixed "
-            "$\\alpha=0$.** Rows show paired relative heterogeneous-minus-mean-"
-            "matched-uniform differences (%) in AP, AUROC, represented-state "
-            "forced accuracy, and represented-state forced macro-F1; columns "
-            "show the B-cell, NK-cell, and dendritic-cell endpoints. For metric "
-            "$M$, each split-level value is "
-            "$100(M_{\\mathrm{heterogeneous}}-M_{\\mathrm{uniform}})/"
-            "M_{\\mathrm{uniform}}$, and each displayed cell is the arithmetic "
-            "mean across five fixed donor splits. Positive "
-            "values favor the heterogeneous query penalty, and negative "
-            "values favor the mean-matched uniform comparator. The vertical "
-            "and horizontal axes show $\\tau_{\\min}$ and $\\tau_{\\max}$, "
-            "respectively, with "
-            "$\\tau_{\\min}\\leq\\tau_{\\max}$. Diagonal cells are zero "
-            "because the two penalties coincide. Color scales are centered at "
-            "zero and shared across endpoints within each metric but differ "
-            "across metrics. Corresponding absolute differences are retained "
-            "as scale context in Supplementary Data 4.\n"
-        ),
-        encoding="utf-8",
-    )
+    caption_path = _write_focused_caption(project_root=project_root)
     manifest_path = (
         project_root
         / "results/PBMC/sensitivity"
@@ -999,6 +1083,7 @@ def run_dendritic_fine(
     runs_root: Path,
     jobs: int,
     pbmc_raw_path: Path,
+    retain_fit_artifacts: bool = False,
 ) -> tuple[Path, Path, Path]:
     return _run_direct_grid(
         project_root=project_root,
@@ -1013,6 +1098,7 @@ def run_dendritic_fine(
             "manuscript_fig_pbmc_rho_tau_surface_alpha0_dendritic_fine.png"
         ),
         progress_label="dendritic-fine PBMC",
+        retain_fit_artifacts=retain_fit_artifacts,
     )
 
 
@@ -1022,6 +1108,7 @@ def run(
     runs_root: Path,
     jobs: int,
     pbmc_raw_path: Path,
+    retain_fit_artifacts: bool = False,
 ) -> tuple[Path, Path, Path]:
     output_root = (
         project_root
@@ -1042,6 +1129,7 @@ def run(
                 spec=spec,
                 seed=seed,
                 pbmc_condition=condition,
+                retain_fit_artifacts=retain_fit_artifacts,
             ): (spec.endpoint, seed)
             for spec, seed in tasks
         }
@@ -1127,6 +1215,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "from the existing paired table without running model fits."
         ),
     )
+    parser.add_argument(
+        "--retain-fit-artifacts",
+        action="store_true",
+        help="Retain complete paired fit bundles and resume only complete pairs.",
+    )
     args = parser.parse_args(argv)
     if args.jobs < 1:
         raise ValueError("--jobs must be positive")
@@ -1150,6 +1243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         runs_root=args.runs_root.resolve(),
         jobs=args.jobs,
         pbmc_raw_path=args.pbmc_raw_path.resolve(),
+        retain_fit_artifacts=args.retain_fit_artifacts,
     ):
         print(path)
     return 0

@@ -19,7 +19,7 @@ from sklearn.metrics import accuracy_score, average_precision_score, f1_score, r
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Patch, Rectangle
+from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Rectangle
 from matplotlib.text import Text
 from matplotlib.transforms import Bbox
 
@@ -42,12 +42,9 @@ COMPARISON_DETECTION_PATH = (
     PROJECT_ROOT / "results/PBMC/compare_baselines/tables/compare_detection_by_run.csv"
 )
 COMPARISON_LABEL_TRANSFER_PATH = (
-    PROJECT_ROOT
-    / "results/PBMC/compare_baselines/tables/compare_shared_label_transfer_by_run.csv"
+    PROJECT_ROOT / "results/PBMC/compare_baselines/tables/compare_shared_label_transfer_by_run.csv"
 )
-FIXED_QUERY_UMAP_PATH = (
-    PROJECT_ROOT / "results/PBMC/figures/data/figure_3_seed1_umap_scores.csv"
-)
+FIXED_QUERY_UMAP_PATH = PROJECT_ROOT / "results/PBMC/figures/data/figure_3_seed1_umap_scores.csv"
 BENCHMARK_CONFIG_PATH = PROJECT_ROOT / "experiments/pbmc_state/configs/benchmark.yaml"
 INTERNAL_CANDIDATE_SET = "pca30_k100"
 EXTERNAL_CANDIDATE_SET = "external_reference_mapping"
@@ -58,9 +55,9 @@ TRANSPORT_ETA = 1.0e-12
 ENDPOINTS = ("B cells", "NK cells", "Dendritic cells")
 SEEDS = (1, 2, 3, 4, 5)
 ENDPOINT_DISPLAY = {
-    "B cells": "Stimulated B held out",
-    "NK cells": "Stimulated NK held out",
-    "Dendritic cells": "Stimulated DC held out",
+    "B cells": "Reference-omitted stimulated B cells",
+    "NK cells": "Reference-omitted stimulated NK cells",
+    "Dendritic cells": "Reference-omitted stimulated DCs",
 }
 ENDPOINT_SHORT = {
     "B cells": "B",
@@ -70,15 +67,15 @@ ENDPOINT_SHORT = {
 
 PANEL_B_METHODS = (
     ("coreot_full", "u", "CoRe-OT"),
-    ("uniform_uot", "u", "Uniform UOT"),
-    ("prior_only", "prior_risk", "Prior only"),
+    ("scdot", "z_absent_score", "scDOT"),
+    ("tacco_ot", "z_absent_score", "TACCO-OT"),
     ("seurat_anchor", "u", "Seurat"),
     ("scmap_cluster", "u", "scmap-cluster"),
     ("chetah", "u", "CHETAH"),
 )
-PANEL_B_AP_LIMITS = (0.4, 1.0)
-PANEL_B_AP_DISPLAY_LIMITS = (0.4, 1.025)
-PANEL_B_AP_TICKS = (0.4, 0.7, 1.0)
+PANEL_B_AP_LIMITS = (0.0, 1.0)
+PANEL_B_AP_DISPLAY_LIMITS = (-0.025, 1.025)
+PANEL_B_AP_TICKS = (0.0, 0.5, 1.0)
 PANEL_C_PROBABILITY_DISPLAY_LIMITS = (-0.03, 1.08)
 PANEL_C_METHODS = (
     ("coreot_full", "u"),
@@ -93,12 +90,14 @@ PANEL_C_CONTRASTS = (
 )
 PANEL_F_METHODS = (
     ("coreot_full", "u", "CoRe-OT"),
-    ("uniform_uot", "u", "Uniform UOT"),
+    ("scdot", "z_absent_score", "scDOT"),
+    ("tacco_ot", "z_absent_score", "TACCO-OT"),
     ("seurat_anchor", "u", "Seurat"),
     ("scmap_cluster", "u", "scmap-cluster"),
     ("chetah", "u", "CHETAH"),
 )
 PANEL_D_METHODS = PANEL_F_METHODS
+PANEL_D_LIM = (0.5, 1.0)
 PANEL_D_METRICS = (
     ("forced_macro_f1", "Forced macro-F1", "#4C78A8"),
     ("forced_accuracy", "Forced accuracy", "#F2A65A"),
@@ -106,11 +105,11 @@ PANEL_D_METRICS = (
 PANEL_E_METHODS = PANEL_B_METHODS
 PANEL_D_SEED = 1
 PANEL_E_MAPS = (
-    ("truth", "Held-out truth"),
+    ("truth", "Reference-omitted cells"),
     *((method, display) for method, _, display in PANEL_E_METHODS),
 )
 PANEL_F_MAPS = (
-    ("truth", "Ground truth"),
+    ("truth", "Evaluation labels"),
     *((method, display) for method, _, display in PANEL_F_METHODS),
 )
 
@@ -131,6 +130,8 @@ METHOD_COLORS = {
     "uniform_uot": "#D55E00",
     "coreot_match_only": "#009E73",
     "prior_only": "#009E73",
+    "scdot": "#D55E00",
+    "tacco_ot": "#009E73",
     "seurat_anchor": "#CC79A7",
     "scmap_cluster": "#E69F00",
     "chetah": "#6A3D9A",
@@ -140,6 +141,8 @@ METHOD_MARKERS = {
     "uniform_uot": "s",
     "coreot_match_only": "^",
     "prior_only": "D",
+    "scdot": "s",
+    "tacco_ot": "^",
     "seurat_anchor": "s",
     "scmap_cluster": "v",
     "chetah": "D",
@@ -358,9 +361,9 @@ def compute_within_celltype_metrics(
         raise PBMCFigure3Error("Truth and score cell identifiers must be unique.")
     if set(truth["cell_id"]) != set(scores["cell_id"]):
         raise PBMCFigure3Error("Truth and score cell sets must match exactly.")
-    joined = truth.loc[
-        :, ["cell_id", "true_label", "is_absent_state"]
-    ].merge(scores, on="cell_id", validate="one_to_one")
+    joined = truth.loc[:, ["cell_id", "true_label", "is_absent_state"]].merge(
+        scores, on="cell_id", validate="one_to_one"
+    )
     raw = metadata.reindex(joined["cell_id"])
     if raw[["cell_type", "condition"]].isna().any().any():
         raise PBMCFigure3Error("Some query cells do not join to raw PBMC metadata.")
@@ -377,8 +380,7 @@ def compute_within_celltype_metrics(
             f"Condition-specific positive labels disagree with raw metadata for {endpoint}."
         )
     local = joined.loc[
-        joined["raw_cell_type"].eq(endpoint)
-        & joined["condition"].isin(("ctrl", "stim"))
+        joined["raw_cell_type"].eq(endpoint) & joined["condition"].isin(("ctrl", "stim"))
     ].copy()
     y_true = local["condition"].eq("stim").to_numpy(dtype=bool)
     y_score = local[score_column].to_numpy(dtype=float)
@@ -574,12 +576,8 @@ def collect_panel_c_data(
                 "auprc_match_only": metrics["coreot_match_only"],
                 "auprc_uniform_uot": metrics["uniform_uot"],
                 "auprc_prior_only": metrics["prior_only"],
-                "delta_full_match_only": (
-                    metrics["coreot_full"] - metrics["coreot_match_only"]
-                ),
-                "delta_match_only_uniform": (
-                    metrics["coreot_match_only"] - metrics["uniform_uot"]
-                ),
+                "delta_full_match_only": (metrics["coreot_full"] - metrics["coreot_match_only"]),
+                "delta_match_only_uniform": (metrics["coreot_match_only"] - metrics["uniform_uot"]),
                 "delta_full_prior": metrics["coreot_full"] - metrics["prior_only"],
             }
         )
@@ -640,7 +638,11 @@ def _read_coreot_transport(
     if set(selected["cell_id"]) != expected_cell_ids:
         raise PBMCFigure3Error(f"{path} does not match the paired query cell set.")
     numeric = selected[["a", "a_hat", "u"]].to_numpy(dtype=float)
-    if not np.isfinite(numeric).all() or (selected["a"] <= 0).any() or (selected["a_hat"] < 0).any():
+    if (
+        not np.isfinite(numeric).all()
+        or (selected["a"] <= 0).any()
+        or (selected["a_hat"] < 0).any()
+    ):
         raise PBMCFigure3Error(f"{path} contains invalid transported marginals.")
     expected_u = np.maximum(
         selected["a"].to_numpy(dtype=float) - selected["a_hat"].to_numpy(dtype=float),
@@ -728,9 +730,9 @@ def _conditional_destination_table(
         numerator.to_numpy(dtype=float) / joined_totals.to_numpy(dtype=float),
         np.nan,
     )
-    eligible_values = per_cell.loc[
-        per_cell["eligible_destination"], probability_name
-    ].to_numpy(dtype=float)
+    eligible_values = per_cell.loc[per_cell["eligible_destination"], probability_name].to_numpy(
+        dtype=float
+    )
     if (
         not np.isfinite(eligible_values).all()
         or (eligible_values < -1.0e-12).any()
@@ -751,9 +753,7 @@ def _forced_destinations(selected_coupling: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     grouped["condition_specific_destination"] = (
-        grouped["target_cell_type"].astype(str)
-        + "::"
-        + grouped["target_condition"].astype(str)
+        grouped["target_cell_type"].astype(str) + "::" + grouped["target_condition"].astype(str)
     )
     ranked = grouped.sort_values(
         ["source_cell_id", "coupling", "condition_specific_destination"],
@@ -803,16 +803,18 @@ def collect_panel_d_data(
             condition=FULL_REFERENCE,
             expected_cell_ids=truth_ids,
         )
-        paired = truth.loc[
-            :, ["cell_id", "true_label", "is_absent_state"]
-        ].merge(
-            incomplete.loc[:, ["cell_id", "u"]].rename(columns={"u": "u_ablated"}),
-            on="cell_id",
-            validate="one_to_one",
-        ).merge(
-            full.loc[:, ["cell_id", "u"]].rename(columns={"u": "u_full"}),
-            on="cell_id",
-            validate="one_to_one",
+        paired = (
+            truth.loc[:, ["cell_id", "true_label", "is_absent_state"]]
+            .merge(
+                incomplete.loc[:, ["cell_id", "u"]].rename(columns={"u": "u_ablated"}),
+                on="cell_id",
+                validate="one_to_one",
+            )
+            .merge(
+                full.loc[:, ["cell_id", "u"]].rename(columns={"u": "u_full"}),
+                on="cell_id",
+                validate="one_to_one",
+            )
         )
         raw = metadata.reindex(paired["cell_id"])
         if raw[["cell_type", "condition"]].isna().any().any():
@@ -836,9 +838,7 @@ def collect_panel_d_data(
         local.insert(0, "endpoint", descriptor.endpoint)
 
         held_ids = set(
-            local.loc[
-                local["truth_group"].eq("held_out_stimulated"), "cell_id"
-            ].astype(str)
+            local.loc[local["truth_group"].eq("held_out_stimulated"), "cell_id"].astype(str)
         )
         full_coupling, coupling_path = _read_coupling(descriptor.root, FULL_REFERENCE)
         restored, _ = _conditional_destination_table(
@@ -847,8 +847,7 @@ def collect_panel_d_data(
             metadata=metadata,
             transported=full,
             numerator_mask=lambda frame, endpoint=descriptor.endpoint: (
-                frame["target_cell_type"].eq(endpoint)
-                & frame["target_condition"].eq("stim")
+                frame["target_cell_type"].eq(endpoint) & frame["target_condition"].eq("stim")
             ),
             probability_name="restored_state_conditional_probability",
         )
@@ -872,9 +871,7 @@ def collect_panel_d_data(
         control = local.loc[local["truth_group"].eq("same_type_control")]
         eligible_held = held.loc[held["eligible_destination"].eq(True)]
         if eligible_held.empty:
-            raise PBMCFigure3Error(
-                f"No eligible held-out cells for Panel D: {descriptor.run_id}"
-            )
+            raise PBMCFigure3Error(f"No eligible held-out cells for Panel D: {descriptor.run_id}")
         deficit_response = control_adjusted_median_deficit_decrease(
             incomplete=local["u_ablated"],
             full=local["u_full"],
@@ -890,9 +887,7 @@ def collect_panel_d_data(
                 "heldout_u_full": float(held["u_full"].median()),
                 "control_u_ablated": float(control["u_ablated"].median()),
                 "control_u_full": float(control["u_full"].median()),
-                "restoration_specificity": (
-                    deficit_response.control_adjusted_decrease
-                ),
+                "restoration_specificity": (deficit_response.control_adjusted_decrease),
                 "restored_state_conditional_probability": float(
                     eligible_held["restored_state_conditional_probability"].median()
                 ),
@@ -947,7 +942,10 @@ def collect_panel_e_data(
             score_frame["method"].eq("coreot_full"),
             ["cell_id", "u", "forced_label"],
         ].copy()
-        if set(coreot_scores["cell_id"]) != truth_ids or coreot_scores["cell_id"].duplicated().any():
+        if (
+            set(coreot_scores["cell_id"]) != truth_ids
+            or coreot_scores["cell_id"].duplicated().any()
+        ):
             raise PBMCFigure3Error(f"Panel E score rows mismatch {descriptor.run_id}.")
         local_truth = truth.loc[truth["true_label"].eq(descriptor.endpoint)].copy()
         local_ids = set(local_truth["cell_id"])
@@ -960,27 +958,30 @@ def collect_panel_e_data(
             source_ids=local_ids,
             metadata=metadata,
             transported=transported,
-            numerator_mask=lambda frame, endpoint=descriptor.endpoint: (
-                frame["target_cell_type"].eq(endpoint)
+            numerator_mask=lambda frame, endpoint=descriptor.endpoint: frame["target_cell_type"].eq(
+                endpoint
             ),
             probability_name="same_celltype_conditional_mass",
         )
         forced = _forced_destinations(selected_coupling)
-        local = local_truth.loc[
-            :, ["cell_id", "is_absent_state"]
-        ].merge(
-            conditional,
-            on="cell_id",
-            validate="one_to_one",
-        ).merge(
-            coreot_scores.loc[:, ["cell_id", "forced_label"]],
-            on="cell_id",
-            validate="one_to_one",
-        ).merge(
-            forced,
-            left_on="cell_id",
-            right_on="source_cell_id",
-            validate="one_to_one",
+        local = (
+            local_truth.loc[:, ["cell_id", "is_absent_state"]]
+            .merge(
+                conditional,
+                on="cell_id",
+                validate="one_to_one",
+            )
+            .merge(
+                coreot_scores.loc[:, ["cell_id", "forced_label"]],
+                on="cell_id",
+                validate="one_to_one",
+            )
+            .merge(
+                forced,
+                left_on="cell_id",
+                right_on="source_cell_id",
+                validate="one_to_one",
+            )
         )
         raw = metadata.reindex(local["cell_id"])
         if raw[["cell_type", "condition"]].isna().any().any():
@@ -996,9 +997,12 @@ def collect_panel_e_data(
         ):
             raise PBMCFigure3Error("Panel E truth groups disagree with absent-state truth.")
         eligible = local["eligible_destination"].astype(bool)
-        if not local.loc[eligible, "forced_label"].astype(str).eq(
-            local.loc[eligible, "coupling_forced_cell_type"].astype(str)
-        ).all():
+        if (
+            not local.loc[eligible, "forced_label"]
+            .astype(str)
+            .eq(local.loc[eligible, "coupling_forced_cell_type"].astype(str))
+            .all()
+        ):
             raise PBMCFigure3Error(
                 f"Forced cell-type assignments disagree with coupling destinations: {descriptor.run_id}"
             )
@@ -1006,9 +1010,7 @@ def collect_panel_e_data(
             columns={
                 "a_hat": "transported_mass",
                 "forced_label": "forced_cell_type_assignment",
-                "condition_specific_destination": (
-                    "forced_condition_specific_destination"
-                ),
+                "condition_specific_destination": ("forced_condition_specific_destination"),
             }
         )
         local.insert(0, "run_id", descriptor.run_id)
@@ -1124,9 +1126,7 @@ def collect_panel_f_data(
                         "forced_accuracy": float(row["forced_accuracy"]),
                         "forced_macro_f1": float(row["forced_macro_f1"]),
                         "coverage": float(row["coverage"]),
-                        "post_abstention_macro_f1": float(
-                            row["post_abstention_macro_f1"]
-                        ),
+                        "post_abstention_macro_f1": float(row["post_abstention_macro_f1"]),
                     }
                 )
     by_seed = pd.DataFrame(rows)
@@ -1222,7 +1222,7 @@ def collect_panel_d_umap_data(
         base["is_held_out"] = base["is_absent_state"].astype(bool)
         n_selected = int(base["is_held_out"].sum())
         if n_selected <= 0:
-            raise PBMCFigure3Error(f"Panel E has no held-out cells for {endpoint}.")
+            raise PBMCFigure3Error(f"Panel E has no reference-omitted cells for {endpoint}.")
 
         truth_map = base.copy()
         truth_map["map_id"] = "truth"
@@ -1243,9 +1243,7 @@ def collect_panel_d_umap_data(
             root = runs_root / str(expected["run_id"])
             method_truth = _read_truth(root)
             if set(method_truth["cell_id"].astype(str)) != truth_ids:
-                raise PBMCFigure3Error(
-                    f"Panel E query cells differ for {endpoint}/{method}."
-                )
+                raise PBMCFigure3Error(f"Panel E query cells differ for {endpoint}/{method}.")
             score_frame = _read_scores(
                 root,
                 INCOMPLETE_REFERENCE,
@@ -1270,9 +1268,7 @@ def collect_panel_d_umap_data(
             )
             selected_ids = set(ranked.head(n_selected)["cell_id"])
             if len(selected_ids) != n_selected:
-                raise PBMCFigure3Error(
-                    f"Panel E top-N selection failed for {endpoint}/{method}."
-                )
+                raise PBMCFigure3Error(f"Panel E top-N selection failed for {endpoint}/{method}.")
             method_map["map_id"] = method
             method_map["map_display"] = display
             method_map["method"] = method
@@ -1287,9 +1283,7 @@ def collect_panel_d_umap_data(
                     "run_id": str(expected["run_id"]),
                     "score_name": score,
                     "n_query": len(method_map),
-                    "n_evaluation_cohort": int(
-                        method_map["is_evaluation_cohort"].sum()
-                    ),
+                    "n_evaluation_cohort": int(method_map["is_evaluation_cohort"].sum()),
                     "n_held_out": n_selected,
                     "n_selected": int(method_map["is_selected"].sum()),
                     "n_selected_held_out": int(
@@ -1300,15 +1294,9 @@ def collect_panel_d_umap_data(
             source_paths.add(str(root))
     cells = pd.concat(frames, ignore_index=True)
     cells.insert(1, "seed", PANEL_D_SEED)
-    expected_maps = {
-        (endpoint, map_id)
-        for endpoint in ENDPOINTS
-        for map_id, _ in PANEL_E_MAPS
-    }
+    expected_maps = {(endpoint, map_id) for endpoint in ENDPOINTS for map_id, _ in PANEL_E_MAPS}
     observed_maps = set(
-        cells[["endpoint", "map_id"]]
-        .drop_duplicates()
-        .itertuples(index=False, name=None)
+        cells[["endpoint", "map_id"]].drop_duplicates().itertuples(index=False, name=None)
     )
     if observed_maps != expected_maps:
         raise PBMCFigure3Error("Panel E maps differ from the accepted contract.")
@@ -1326,9 +1314,7 @@ def collect_panel_f_assignment_data(
     runs_root: Path = RUNS_ROOT,
     umap_path: Path = FIXED_QUERY_UMAP_PATH,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-    by_seed, _, source_paths = collect_panel_f_data(
-        label_transfer_path=label_transfer_path
-    )
+    by_seed, _, source_paths = collect_panel_f_data(label_transfer_path=label_transfer_path)
     seed_rows = by_seed.loc[by_seed["seed"].eq(PANEL_D_SEED)]
     frames: list[pd.DataFrame] = []
     summaries: list[dict[str, object]] = []
@@ -1350,9 +1336,7 @@ def collect_panel_f_assignment_data(
         base["is_represented"] = base["is_shared_state"].astype(bool)
         base["is_held_out"] = base["is_absent_state"].astype(bool)
         if not (base["is_represented"] ^ base["is_held_out"]).all():
-            raise PBMCFigure3Error(
-                f"Panel F truth does not partition query cells for {endpoint}."
-            )
+            raise PBMCFigure3Error(f"Panel F truth does not partition query cells for {endpoint}.")
         represented_labels = sorted(
             base.loc[base["is_represented"], "true_label"].astype(str).unique()
         )
@@ -1371,19 +1355,14 @@ def collect_panel_f_assignment_data(
 
         for method, score, display in PANEL_F_METHODS:
             metric_row = endpoint_rows.loc[
-                endpoint_rows["method"].eq(method)
-                & endpoint_rows["score"].eq(score)
+                endpoint_rows["method"].eq(method) & endpoint_rows["score"].eq(score)
             ]
             if len(metric_row) != 1:
-                raise PBMCFigure3Error(
-                    f"Panel F lacks one metric row for {endpoint}/{method}."
-                )
+                raise PBMCFigure3Error(f"Panel F lacks one metric row for {endpoint}/{method}.")
             root = runs_root / str(metric_row.iloc[0]["run_id"])
             method_truth = _read_truth(root)
             if set(method_truth["cell_id"].astype(str)) != truth_ids:
-                raise PBMCFigure3Error(
-                    f"Panel F query cells differ for {endpoint}/{method}."
-                )
+                raise PBMCFigure3Error(f"Panel F query cells differ for {endpoint}/{method}.")
             score_frame = _read_scores(
                 root,
                 INCOMPLETE_REFERENCE,
@@ -1395,12 +1374,11 @@ def collect_panel_f_assignment_data(
                 ["cell_id", "forced_label"],
             ].copy()
             assignments["cell_id"] = assignments["cell_id"].astype(str)
-            if assignments["cell_id"].duplicated().any() or set(
-                assignments["cell_id"]
-            ) != truth_ids:
-                raise PBMCFigure3Error(
-                    f"Panel F assignment cells differ for {endpoint}/{method}."
-                )
+            if (
+                assignments["cell_id"].duplicated().any()
+                or set(assignments["cell_id"]) != truth_ids
+            ):
+                raise PBMCFigure3Error(f"Panel F assignment cells differ for {endpoint}/{method}.")
             method_map = base.merge(
                 assignments,
                 on="cell_id",
@@ -1416,8 +1394,7 @@ def collect_panel_f_assignment_data(
                 "Held-out state (not evaluated)",
             )
             unexpected = sorted(
-                set(method_map.loc[represented, "displayed_assignment"])
-                - set(CELL_TYPE_COLORS)
+                set(method_map.loc[represented, "displayed_assignment"]) - set(CELL_TYPE_COLORS)
             )
             if unexpected:
                 raise PBMCFigure3Error(
@@ -1465,15 +1442,9 @@ def collect_panel_f_assignment_data(
             source_set.add(str(root))
     cells = pd.concat(frames, ignore_index=True)
     cells.insert(1, "seed", PANEL_D_SEED)
-    expected_maps = {
-        (endpoint, map_id)
-        for endpoint in ENDPOINTS
-        for map_id, _ in PANEL_F_MAPS
-    }
+    expected_maps = {(endpoint, map_id) for endpoint in ENDPOINTS for map_id, _ in PANEL_F_MAPS}
     observed_maps = set(
-        cells[["endpoint", "map_id"]]
-        .drop_duplicates()
-        .itertuples(index=False, name=None)
+        cells[["endpoint", "map_id"]].drop_duplicates().itertuples(index=False, name=None)
     )
     if observed_maps != expected_maps:
         raise PBMCFigure3Error("Panel F maps differ from the accepted contract.")
@@ -1541,18 +1512,19 @@ def _rounded_box(
     fontsize: float = 6.2,
     fontweight: str = "normal",
     linewidth: float = 0.8,
+    gid: str | None = None,
 ) -> None:
-    ax.add_patch(
-        FancyBboxPatch(
-            (x, y),
-            width,
-            height,
-            boxstyle="round,pad=0.008,rounding_size=0.012",
-            facecolor=facecolor,
-            edgecolor=edgecolor,
-            linewidth=linewidth,
-        )
+    patch = FancyBboxPatch(
+        (x, y),
+        width,
+        height,
+        boxstyle="round,pad=0.008,rounding_size=0.012",
+        facecolor=facecolor,
+        edgecolor=edgecolor,
+        linewidth=linewidth,
     )
+    patch.set_gid(gid)
+    ax.add_patch(patch)
     ax.text(
         x + width / 2,
         y + height / 2,
@@ -1677,7 +1649,7 @@ def draw_panel_a(
     ax.text(
         0.5,
         0.84,
-        "Donor-aware split",
+        "Donor-level split",
         ha="center",
         va="center",
         fontsize=font + 0.5,
@@ -1689,7 +1661,7 @@ def draw_panel_a(
         y=0.42,
         width=0.22,
         height=0.22,
-        text="Complete query\nall PBMC states retained",
+        text="Query cells\nall states retained",
         facecolor=QUERY_FILL,
         edgecolor=CONTROL,
         fontsize=font,
@@ -1706,31 +1678,30 @@ def draw_panel_a(
     )
     _rounded_box(
         ax,
-        x=0.64,
+        x=0.60,
         y=0.59,
-        width=0.30,
+        width=0.36,
         height=0.20,
-        text=(
-            "Ablated reference\nremove one target Stim state\n"
-            "same-type Ctrl remains"
-        ),
+        text=("Reference-omitted condition\nomit one target Stim state\nsame-type Ctrl remains"),
         facecolor="#FFF4EE",
         edgecolor=STIMULATED,
         fontsize=font - 0.2,
+        gid="panel-a-reference-omitted-box",
     )
     _rounded_box(
         ax,
-        x=0.64,
+        x=0.60,
         y=0.27,
-        width=0.30,
+        width=0.36,
         height=0.20,
-        text="Matched full reference\ntarget Stim state retained",
+        text="Restored-reference condition\ntarget Stim state retained",
         facecolor="#E8F4ED",
         edgecolor=RESTORED,
         fontsize=font,
+        gid="panel-a-restored-reference-box",
     )
-    _arrow(ax, (0.54, 0.56), (0.64, 0.69), color=STIMULATED)
-    _arrow(ax, (0.54, 0.49), (0.64, 0.37), color=RESTORED)
+    _arrow(ax, (0.54, 0.56), (0.60, 0.69), color=STIMULATED)
+    _arrow(ax, (0.54, 0.49), (0.60, 0.37), color=RESTORED)
     # The unchanged query enters both paired mappings through separate routes.
     ax.plot(
         [0.26, 0.30, 0.30, 0.59, 0.59],
@@ -1749,20 +1720,22 @@ def draw_panel_a(
     ax.text(
         0.42,
         0.75,
-        "same query",
+        "Same query cells",
         ha="center",
         va="bottom",
         fontsize=font - 0.4,
         color=CONTROL,
     )
-    ax.text(
-        0.5,
-        0.09,
-        "Within-type ranking: held-out stimulated cells versus same-type controls",
-        ha="center",
-        va="bottom",
+    _rounded_box(
+        ax,
+        x=0.06,
+        y=0.02,
+        width=0.88,
+        height=0.15,
+        text="within-cell-type omitted-state ranking\npaired reference-restoration response",
+        facecolor="#F7F7F7",
+        edgecolor=INK,
         fontsize=font,
-        color=INK,
     )
 
 
@@ -1770,8 +1743,9 @@ def _method_axis_labels(methods: Iterable[tuple[str, str, str]]) -> list[str]:
     labels = []
     for _, _, display in methods:
         labels.append(
-            display.replace("scmap-cluster", "scmap-\ncluster")
-            .replace("Uniform UOT", "Uniform\nUOT")
+            display.replace("scmap-cluster", "scmap-\ncluster").replace(
+                "Uniform UOT", "Uniform\nUOT"
+            )
         )
     return labels
 
@@ -1788,9 +1762,7 @@ def draw_panel_b(
     method_order = [method for method, _, _ in PANEL_B_METHODS]
     y = np.arange(len(method_order))
     seed_offsets = dict(zip(SEEDS, np.linspace(-0.13, 0.13, len(SEEDS))))
-    display_by_method = {
-        method: display for method, _, display in PANEL_B_METHODS
-    }
+    display_by_method = {method: display for method, _, display in PANEL_B_METHODS}
     for endpoint_index, (ax, endpoint) in enumerate(zip(axes, ENDPOINTS)):
         local = by_seed.loc[by_seed["endpoint"].eq(endpoint)]
         for method_index, method in enumerate(method_order):
@@ -1835,19 +1807,16 @@ def draw_panel_b(
             xlim=PANEL_B_AP_DISPLAY_LIMITS,
             ylim=(len(method_order) - 0.5, -0.5),
             yticks=y,
-            title=(
-                f"{ENDPOINT_SHORT[endpoint]} held out"
-                if compact
-                else f"{ENDPOINT_SHORT[endpoint]} held out"
-            ),
+            title={
+                "B cells": "Stimulated B",
+                "NK cells": "Stimulated NK",
+                "Dendritic cells": "Stimulated DC",
+            }[endpoint],
         )
         ax.set_xticks(PANEL_B_AP_TICKS)
         if endpoint_index == 0:
             ax.set_yticklabels(
-                [
-                    display_by_method[method]
-                    for method in method_order
-                ],
+                [display_by_method[method] for method in method_order],
                 fontsize=5.6,
             )
         else:
@@ -1855,7 +1824,7 @@ def draw_panel_b(
         ax.title.set_fontsize(5.8 if compact else 6.8)
         ax.title.set_fontweight("bold")
         if endpoint_index == 0:
-            ax.set_xlabel("Within-cell-type AP", fontsize=6.4)
+            ax.set_xlabel("AP for omitted-state ranking", fontsize=6.4)
         _style_axis(ax, grid_axis="x")
     if include_heading:
         _panel_heading(
@@ -1865,8 +1834,8 @@ def draw_panel_b(
             title_x=0.12,
             y=heading_y,
         )
-    axes[1].set_xlabel("Within-cell-type AP", fontsize=6.4)
-    axes[-1].set_xlabel("Within-cell-type AP", fontsize=6.4)
+    axes[1].set_xlabel("AP for omitted-state ranking", fontsize=6.4)
+    axes[-1].set_xlabel("AP for omitted-state ranking", fontsize=6.4)
     axes[-1].text(
         0.02,
         0.98,
@@ -1891,9 +1860,9 @@ def draw_panel_c(
         color = CONTRAST_COLORS[column]
         marker = CONTRAST_MARKERS[column]
         for endpoint_index, endpoint in enumerate(ENDPOINTS):
-            values = by_seed.loc[
-                by_seed["endpoint"].eq(endpoint), ["seed", column]
-            ].sort_values("seed")
+            values = by_seed.loc[by_seed["endpoint"].eq(endpoint), ["seed", column]].sort_values(
+                "seed"
+            )
             center = endpoint_index + offsets[contrast_index]
             jitter = np.linspace(-0.045, 0.045, len(values))
             ax.scatter(
@@ -1923,9 +1892,7 @@ def draw_panel_c(
                 zorder=5,
             )
     ax.axhline(0, color=INK, linewidth=0.75, zorder=2)
-    values = by_seed[[column for column, _ in PANEL_C_CONTRASTS]].to_numpy(
-        dtype=float
-    )
+    values = by_seed[[column for column, _ in PANEL_C_CONTRASTS]].to_numpy(dtype=float)
     lower = min(-0.06, float(np.nanmin(values)) - 0.05)
     upper = max(0.08, float(np.nanmax(values)) + 0.05)
     ax.set(
@@ -1935,8 +1902,8 @@ def draw_panel_c(
         xticklabels=["B", "NK", "DC"],
         ylabel="Paired ΔAP",
     )
-    ax.set_xlabel("Held-out stimulated state", fontsize=6.4)
-    ax.set_ylabel("Paired ΔAP", fontsize=6.8)
+    ax.set_xlabel("Reference-omitted cells", fontsize=6.4)
+    ax.set_ylabel("Control-adjusted decrease, $\\Delta^{\\mathrm{CA}}$", fontsize=6.8)
     _style_axis(ax)
     if include_heading:
         _panel_heading(ax, "C", "Transport and prior controls", title_x=0.12)
@@ -1976,7 +1943,7 @@ def draw_panel_d(
 ) -> None:
     row_specs = []
     for endpoint in ENDPOINTS:
-        row_specs.append((endpoint, "heldout", f"{ENDPOINT_SHORT[endpoint]} held-out"))
+        row_specs.append((endpoint, "heldout", f"{ENDPOINT_SHORT[endpoint]} reference-omitted"))
         row_specs.append((endpoint, "control", f"{ENDPOINT_SHORT[endpoint]} control"))
     y_positions = np.arange(len(row_specs))[::-1]
     seed_offsets = dict(zip(SEEDS, np.linspace(-0.18, 0.18, len(SEEDS))))
@@ -2044,12 +2011,28 @@ def draw_panel_d(
         )
     deficit_ax.set(
         xlim=(0, 0.85),
+        ylim=(-0.55, 5.85),
         yticks=y_positions,
         yticklabels=[label for _, _, label in row_specs],
         xlabel=r"Median query-marginal deficit, $u$",
     )
     deficit_ax.tick_params(axis="y", labelsize=5.8)
-    deficit_ax.set_xlabel(r"Median query-marginal deficit, $u$", fontsize=6.4)
+    for y, endpoint in zip((5.55, 3.55, 1.55), ENDPOINTS, strict=True):
+        deficit_ax.text(
+            0.42,
+            y,
+            {
+                "B cells": "Stimulated B",
+                "NK cells": "Stimulated NK",
+                "Dendritic cells": "Stimulated DC",
+            }[endpoint],
+            ha="center",
+            va="bottom",
+            fontsize=6.0,
+            fontweight="bold",
+            clip_on=False,
+        )
+    deficit_ax.set_xlabel("Decrease in median\nquery-marginal deficit", fontsize=6.4, labelpad=2)
     _style_axis(deficit_ax, grid_axis="x")
     deficit_ax.legend(
         handles=[
@@ -2061,7 +2044,7 @@ def draw_panel_d(
                 markerfacecolor="white",
                 markeredgecolor=INK,
                 markersize=4.4,
-                label="Ablated",
+                label="Reference-omitted condition",
             ),
             Line2D(
                 [0],
@@ -2071,7 +2054,7 @@ def draw_panel_d(
                 markerfacecolor=INK,
                 markeredgecolor=INK,
                 markersize=4.4,
-                label="Matched full",
+                label="Restored-reference condition",
             ),
         ],
         frameon=False,
@@ -2122,18 +2105,14 @@ def draw_panel_d(
         title=(
             r"Control-adjusted ($\Delta^{\mathrm{CA}}$)"
             if compact
-            else "Control-adjusted median-deficit decrease"
+            else "Control-adjusted decrease, $\\Delta^{\\mathrm{CA}}$"
         ),
-        ylabel=r"Control-adjusted decrease, $\Delta^{\mathrm{CA}}$",
+        ylabel=r"$\Delta^{\mathrm{CA}}$",
     )
     specificity_ax.title.set_fontsize(6.1)
     specificity_ax.title.set_fontweight("bold")
     specificity_ax.set_ylabel(
-        (
-            r"$\Delta^{\mathrm{CA}}$"
-            if compact
-            else r"Control-adjusted decrease, $\Delta^{\mathrm{CA}}$"
-        ),
+        (r"$\Delta^{\mathrm{CA}}$" if compact else r"$\Delta^{\mathrm{CA}}$"),
         fontsize=6.0,
     )
     _style_axis(specificity_ax)
@@ -2163,12 +2142,12 @@ def draw_panel_d(
         ylim=(0, 1.02),
         xticks=x,
         xticklabels=["B", "NK", "DC"],
-        title="Restored state" if compact else "Restored-state destination",
-        ylabel="Conditional probability",
+        title="Median restored-state destination fraction",
+        ylabel="Destination\nfraction",
     )
     destination_ax.title.set_fontsize(6.1)
     destination_ax.title.set_fontweight("bold")
-    destination_ax.set_ylabel("Conditional probability", fontsize=6.0)
+    destination_ax.set_ylabel("Destination\nfraction", fontsize=6.0)
     _style_axis(destination_ax)
 
 
@@ -2183,13 +2162,11 @@ def draw_panel_e(
 ) -> None:
     axes = list(axes)
     group_styles = {
-        "held_out_stimulated": (STIMULATED, "Held-out stimulated"),
+        "held_out_stimulated": (STIMULATED, "Reference-omitted stimulated"),
         "same_type_control": (CONTROL, "Same-type control"),
     }
     for endpoint_index, (ax, endpoint) in enumerate(zip(axes, ENDPOINTS)):
-        local = cells.loc[
-            cells["endpoint"].eq(endpoint) & cells["eligible_destination"]
-        ]
+        local = cells.loc[cells["endpoint"].eq(endpoint) & cells["eligible_destination"]]
         for group in ("same_type_control", "held_out_stimulated"):
             color, _ = group_styles[group]
             group_cells = local.loc[local["truth_group"].eq(group)]
@@ -2204,8 +2181,7 @@ def draw_panel_e(
                 zorder=2,
             )
             group_summary = summary.loc[
-                summary["endpoint"].eq(endpoint)
-                & summary["truth_group"].eq(group)
+                summary["endpoint"].eq(endpoint) & summary["truth_group"].eq(group)
             ].sort_values("seed")
             ax.scatter(
                 group_summary["median_same_celltype_conditional_mass"],
@@ -2221,7 +2197,7 @@ def draw_panel_e(
             xlim=(0, 1.02),
             ylim=(0, 1.02),
             title=(
-                f"{ENDPOINT_SHORT[endpoint]} held out"
+                f"{ENDPOINT_SHORT[endpoint]} reference-omitted"
                 if compact
                 else ENDPOINT_DISPLAY[endpoint]
             ),
@@ -2239,7 +2215,7 @@ def draw_panel_e(
         _panel_heading(
             axes[0],
             "E",
-            "Destination versus transported support",
+            "Reference destination versus fitted mass retention",
             title_x=0.12,
             y=heading_y,
         )
@@ -2258,7 +2234,7 @@ def draw_panel_e(
                 markerfacecolor="white",
                 markeredgecolor=STIMULATED,
                 markersize=4.3,
-                label="Held-out stimulated",
+                label="Reference-omitted stimulated",
             ),
             Line2D(
                 [0],
@@ -2325,7 +2301,11 @@ def draw_panel_f(
             ylim=(0, 1.02),
             xticks=x,
             xticklabels=_method_axis_labels(PANEL_F_METHODS),
-            title=ENDPOINT_DISPLAY[endpoint],
+            title={
+                "B cells": "Stimulated B",
+                "NK cells": "Stimulated NK",
+                "Dendritic cells": "Stimulated DC",
+            }[endpoint],
         )
         ax.set_yticks(np.linspace(0, 1, 6))
         ax.tick_params(axis="x", labelsize=5.0, pad=1)
@@ -2340,7 +2320,7 @@ def draw_panel_f(
         _panel_heading(
             axes[0],
             "F",
-            "Represented-cell-type label transfer",
+            "",
             title_x=0.12,
             y=heading_y,
         )
@@ -2364,9 +2344,7 @@ def draw_panel_d_umap(axes: np.ndarray, cells: pd.DataFrame) -> None:
             ax = axes[row, column]
             frame = endpoint_cells.loc[endpoint_cells["map_id"].eq(map_id)]
             outside = frame.loc[~frame["is_evaluation_cohort"]]
-            cohort = frame.loc[
-                frame["is_evaluation_cohort"] & ~frame["is_selected"]
-            ]
+            cohort = frame.loc[frame["is_evaluation_cohort"] & ~frame["is_selected"]]
             selected = frame.loc[frame["is_selected"]]
             ax.scatter(
                 outside["umap_1"],
@@ -2388,11 +2366,7 @@ def draw_panel_d_umap(axes: np.ndarray, cells: pd.DataFrame) -> None:
                 rasterized=True,
                 zorder=2,
             )
-            selected_color = (
-                PANEL_E_TRUTH_COLOR
-                if map_id == "truth"
-                else METHOD_COLORS[map_id]
-            )
+            selected_color = PANEL_E_TRUTH_COLOR if map_id == "truth" else METHOD_COLORS[map_id]
             ax.scatter(
                 selected["umap_1"],
                 selected["umap_2"],
@@ -2414,7 +2388,7 @@ def draw_panel_d_umap(axes: np.ndarray, cells: pd.DataFrame) -> None:
                     pad=4,
                 )
         axes[row, 0].set_ylabel(
-            f"{ENDPOINT_SHORT[endpoint]} held out",
+            f"{ENDPOINT_SHORT[endpoint]} reference-omitted",
             fontsize=6.8,
             fontweight="bold",
             labelpad=5,
@@ -2426,9 +2400,7 @@ def draw_panel_e_transfer(axes: Iterable[plt.Axes], by_seed: pd.DataFrame) -> No
     positions = np.arange(len(PANEL_D_METHODS), dtype=float)
     offsets = (-0.15, 0.15)
     metrics = PANEL_D_METRICS
-    display_by_method = {
-        method: display for method, _, display in PANEL_D_METHODS
-    }
+    display_by_method = {method: display for method, _, display in PANEL_D_METHODS}
     for facet, (ax, endpoint) in enumerate(zip(axes, ENDPOINTS)):
         local = by_seed.loc[by_seed["endpoint"].eq(endpoint)]
         for method_index, (method, score, _) in enumerate(PANEL_D_METHODS):
@@ -2440,59 +2412,53 @@ def draw_panel_e_transfer(axes: Iterable[plt.Axes], by_seed: pd.DataFrame) -> No
                 mean = float(values.mean())
                 sample_sd = float(values.std(ddof=1))
                 center = positions[method_index] + offsets[metric_index]
-                ax.barh(
-                    center,
-                    mean - 0.5,
-                    left=0.5,
-                    height=0.22,
-                    facecolor=color,
-                    edgecolor=color,
-                    alpha=0.45,
-                    linewidth=0.6,
-                    zorder=2,
-                )
-                ax.errorbar(
-                    mean,
-                    center,
-                    xerr=sample_sd,
-                    fmt="none",
-                    ecolor=INK,
-                    elinewidth=0.7,
-                    capsize=1.8,
-                    zorder=4,
-                )
                 jitter = np.linspace(-0.035, 0.035, len(values))
                 ax.scatter(
                     values,
                     center + jitter,
                     s=7,
                     color=color,
-                    alpha=0.75,
+                    alpha=0.45,
                     linewidth=0,
-                    zorder=5,
+                    zorder=3,
+                )
+                ax.errorbar(
+                    mean,
+                    center,
+                    xerr=sample_sd,
+                    fmt="o",
+                    markersize=4.0,
+                    markerfacecolor="white",
+                    markeredgecolor=color,
+                    markeredgewidth=0.8,
+                    ecolor=color,
+                    elinewidth=0.7,
+                    capsize=1.8,
+                    zorder=4,
                 )
         ax.set(
             xlim=(0.5, 1.0),
             ylim=(len(PANEL_D_METHODS) - 0.5, -0.5),
             yticks=positions,
-            title=f"{ENDPOINT_SHORT[endpoint]} held out",
+            title={
+                "B cells": "Stimulated B",
+                "NK cells": "Stimulated NK",
+                "Dendritic cells": "Stimulated DC",
+            }[endpoint],
         )
         ax.set_xticks(np.arange(0.5, 1.01, 0.1))
         ax.title.set_fontsize(6.8)
         ax.title.set_fontweight("bold")
         if facet == 0:
             ax.set_yticklabels(
-                [
-                    display_by_method[method]
-                    for method, _, _ in PANEL_D_METHODS
-                ],
+                [display_by_method[method] for method, _, _ in PANEL_D_METHODS],
                 fontsize=5.8,
             )
         else:
             ax.set_yticklabels([])
         _style_axis(ax, grid_axis="x")
     axes[1].set_xlabel(
-        "Represented-cell-type forced label-transfer metric",
+        "Metric value",
         fontsize=6.5,
     )
     _panel_heading(
@@ -2504,7 +2470,18 @@ def draw_panel_e_transfer(axes: Iterable[plt.Axes], by_seed: pd.DataFrame) -> No
     )
     axes[1].legend(
         handles=[
-            Patch(facecolor=color, edgecolor=color, alpha=0.5, label=label)
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="-",
+                color=color,
+                markerfacecolor="white",
+                markeredgecolor=color,
+                markersize=4,
+                linewidth=0.8,
+                label=label,
+            )
             for _, label, color in metrics
         ],
         frameon=False,
@@ -2569,7 +2546,7 @@ def draw_panel_f_assignments(axes: np.ndarray, cells: pd.DataFrame) -> None:
                     pad=4,
                 )
         axes[row, 0].set_ylabel(
-            f"{ENDPOINT_SHORT[endpoint]} held out",
+            f"{ENDPOINT_SHORT[endpoint]} reference-omitted",
             fontsize=6.8,
             fontweight="bold",
             labelpad=5,
@@ -2674,7 +2651,7 @@ def draw_panel_f_compact(ax: plt.Axes, by_seed: pd.DataFrame) -> None:
         xticklabels=["B", "NK", "DC"],
         ylabel="Forced macro-F1",
     )
-    ax.set_xlabel("Held-out stimulated state", fontsize=5.8)
+    ax.set_xlabel("Reference-omitted stimulated state", fontsize=5.8)
     ax.set_ylabel("Forced macro-F1", fontsize=5.8)
     _style_axis(ax)
     ax.legend(
@@ -2704,17 +2681,22 @@ def draw_panel_f_compact(ax: plt.Axes, by_seed: pd.DataFrame) -> None:
 
 def _panel_outputs(letter: str, docs_root: Path) -> dict[str, Path]:
     stem = f"figure_3_pbmc_panel_{letter.lower()}"
-    return {suffix: docs_root / f"{stem}.{suffix}" for suffix in ("png", "pdf", "svg")}
+    legacy_svg = docs_root / f"{stem}.svg"
+    if legacy_svg.is_file():
+        legacy_svg.unlink()
+    return {suffix: docs_root / f"{stem}.{suffix}" for suffix in ("png", "pdf", "tiff")}
 
 
 def _save_figure(fig: plt.Figure, outputs: dict[str, Path]) -> None:
     for suffix, path in outputs.items():
         path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(
-            path,
-            dpi=PANEL_RASTER_DPI if suffix == "png" else None,
-            facecolor="white",
-        )
+        save_kwargs = {
+            "dpi": PANEL_RASTER_DPI if suffix in {"png", "tiff"} else None,
+            "facecolor": "white",
+        }
+        if suffix == "tiff":
+            save_kwargs["pil_kwargs"] = {"compression": "tiff_lzw"}
+        fig.savefig(path, **save_kwargs)
 
 
 def _validate_raster(path: Path, size_inches: tuple[float, float]) -> None:
@@ -2745,9 +2727,7 @@ def _write_panel_manifest(
                 "stage": "manuscript-figure",
                 "figure": "PBMC condition-specific weak correspondence Figure 3",
                 "panel": letter,
-                "generator": (
-                    "experiments/pbmc_state/generate_pbmc_figure3_panels.py"
-                ),
+                "generator": ("experiments/pbmc_state/generate_pbmc_figure3_panels.py"),
                 "artifacts": artifacts,
                 "sources": sources,
                 "parameters": parameters,
@@ -2805,9 +2785,7 @@ def generate_panel_a(
                     "held-out stimulated query cells versus control query cells "
                     "of the same cell type"
                 ),
-                "source_path": (
-                    "docs/manuscript_figure3_pbmc_condition_specific_states.md"
-                ),
+                "source_path": ("docs/manuscript_figure3_pbmc_condition_specific_states.md"),
             },
         ]
     ).to_csv(source_path, index=False)
@@ -2888,16 +2866,11 @@ def generate_panel_b(
                 }
                 for method, score, display in PANEL_B_METHODS
             ],
-            "method_colors": {
-                method: METHOD_COLORS[method]
-                for method, _, _ in PANEL_B_METHODS
-            },
-            "cohort": (
-                "stimulated held-out cell type versus control cells of the same cell type"
-            ),
+            "method_colors": {method: METHOD_COLORS[method] for method, _, _ in PANEL_B_METHODS},
+            "cohort": ("reference-omitted stimulated state versus same-type control cells"),
             "metric_implementation": "sklearn.metrics.average_precision_score",
             "artifact_field": "auprc",
-            "display_label": "average precision (AP)",
+            "display_label": "AP",
             "display_axis": list(PANEL_B_AP_LIMITS),
             "rendered_axis": list(PANEL_B_AP_DISPLAY_LIMITS),
             "display_ticks": list(PANEL_B_AP_TICKS),
@@ -2950,7 +2923,7 @@ def generate_panel_c(
         3,
         left=0.16,
         right=0.99,
-        bottom=0.13,
+        bottom=0.24,
         top=0.80,
         width_ratios=(1.2, 1.2, 1.0),
         hspace=0.55,
@@ -2984,9 +2957,7 @@ def generate_panel_c(
             "restoration_specificity": CONTROL_ADJUSTED_MEDIAN_DEFICIT_DECREASE,
             "restored_destination": TYPICAL_CELL_CONDITIONAL_DESTINATION,
             "probability_ticks": [0.0, 0.5, 1.0],
-            "probability_rendered_axis": list(
-                PANEL_C_PROBABILITY_DISPLAY_LIMITS
-            ),
+            "probability_rendered_axis": list(PANEL_C_PROBABILITY_DISPLAY_LIMITS),
             "probability_right_padding": (
                 "unlabeled padding prevents clipping at the 1.0 boundary"
             ),
@@ -3056,7 +3027,7 @@ def generate_panel_e(
                 markerfacecolor=PANEL_E_TRUTH_COLOR,
                 markeredgecolor="none",
                 markersize=4,
-                label="Held-out truth",
+                label="Reference-omitted cells",
             ),
             Line2D(
                 [0],
@@ -3066,7 +3037,7 @@ def generate_panel_e(
                 markerfacecolor=METHOD_COLORS["coreot_full"],
                 markeredgecolor="none",
                 markersize=4,
-                label=r"Top-ranked set (method color)",
+                label=r"Method-specific top-ranked $N_+$ cells",
             ),
             Line2D(
                 [0],
@@ -3076,7 +3047,7 @@ def generate_panel_e(
                 markerfacecolor=PANEL_E_ELIGIBLE_GRAY,
                 markeredgecolor="none",
                 markersize=4,
-                label="Within-type, not selected",
+                label="Other ranking-cohort cells",
             ),
             Line2D(
                 [0],
@@ -3086,7 +3057,7 @@ def generate_panel_e(
                 markerfacecolor=PANEL_E_CONTEXT_GRAY,
                 markeredgecolor="none",
                 markersize=4,
-                label="Outside within-type cohort",
+                label="Outside ranking cohort",
             ),
         ],
         loc="lower center",
@@ -3118,10 +3089,7 @@ def generate_panel_e(
                 }
                 for map_id, display in PANEL_E_MAPS
             ],
-            "method_colors": {
-                method: METHOD_COLORS[method]
-                for method, _, _ in PANEL_E_METHODS
-            },
+            "method_colors": {method: METHOD_COLORS[method] for method, _, _ in PANEL_E_METHODS},
             "truth_color": PANEL_E_TRUTH_COLOR,
             "eligible_cohort_color": PANEL_E_ELIGIBLE_GRAY,
             "outside_cohort_color": PANEL_E_CONTEXT_GRAY,
@@ -3165,15 +3133,6 @@ def generate_panel_d(
     fig, axes = plt.subplots(1, 3, figsize=PANEL_SIZES["D"])
     fig.subplots_adjust(left=0.15, right=0.98, bottom=0.15, top=0.77, wspace=0.12)
     draw_panel_e_transfer(axes, by_seed)
-    fig.text(
-        0.98,
-        0.95,
-        "Bars start at 0.50",
-        ha="right",
-        va="top",
-        fontsize=5.5,
-        color=MUTED_INK,
-    )
     _save_figure(fig, outputs)
     plt.close(fig)
     manifest = _write_panel_manifest(
@@ -3198,13 +3157,13 @@ def generate_panel_d(
                 for method, score, display in PANEL_D_METHODS
             ],
             "metrics": ["forced_macro_f1", "forced_accuracy"],
-            "metric_colors": {
-                metric: color for metric, _, color in PANEL_D_METRICS
-            },
-            "axis": [0.7, 1.0],
-            "bar_baseline": 0.7,
-            "split_points": "not_displayed",
+            "metric_colors": {metric: color for metric, _, color in PANEL_D_METRICS},
+            "axis": list(PANEL_D_LIM),
+            "encoding": ("five_donor_split_points_plus_arithmetic_mean_and_sample_sd_interval"),
+            "split_points": "five_donor_split_values",
+            "mean": "arithmetic_mean",
             "interval": "mean_plus_or_minus_sample_sd_ddof1",
+            "bar_length_encoding": False,
             "evaluation_population": "represented_cell_types_only",
             "canvas_inches": list(PANEL_SIZES["D"]),
             "raster_dpi": PANEL_RASTER_DPI,
@@ -3278,7 +3237,7 @@ def generate_panel_f(
             ],
             "coordinates": str(umap_path),
             "evaluation_population": "represented_query_cells_only",
-            "heldout_display": "neutral_gray_not_evaluated",
+            "reference_omitted_display": "neutral_gray_not_evaluated",
             "cell_type_colors": CELL_TYPE_COLORS,
             "label_contract": "cell_type_not_cell_type_by_condition",
             "panel_d_crosscheck": ["forced_macro_f1", "forced_accuracy"],
@@ -3301,7 +3260,6 @@ def generate_panel_f(
 
 def generate_destination_support_supplement(
     *,
-    docs_root: Path = DOCS_ROOT,
     result_root: Path = RESULT_ROOT,
     comparison_path: Path = COMPARISON_DETECTION_PATH,
     raw_data_path: Path = RAW_DATA_PATH,
@@ -3319,20 +3277,20 @@ def generate_destination_support_supplement(
     cells.to_parquet(cells_path, index=False)
     summary.to_csv(summary_path, index=False)
 
-    docs_figure_root = docs_root / "figs"
-    docs_figure_root.mkdir(parents=True, exist_ok=True)
     outputs = {
-        suffix: docs_figure_root
-        / f"manuscript_fig_pbmc_supp_destination_support.{suffix}"
-        for suffix in ("png", "pdf", "svg")
+        suffix: supplement_root / f"destination_support.{suffix}"
+        for suffix in ("png", "pdf", "tiff")
     }
+    legacy_svg = supplement_root / "destination_support.svg"
+    if legacy_svg.is_file():
+        legacy_svg.unlink()
     fig, axes = plt.subplots(1, 3, figsize=PANEL_SIZES["E"])
     fig.subplots_adjust(left=0.085, right=0.99, bottom=0.20, top=0.78, wspace=0.16)
     draw_panel_e(axes, cells, summary, include_heading=False)
     fig.text(
         0.02,
         0.95,
-        "Destination composition versus transported support",
+        "Reference destination versus fitted mass retention",
         fontsize=8.0,
         fontweight="bold",
         va="top",
@@ -3386,9 +3344,7 @@ def _read_composite_sources(
     pd.DataFrame,
 ]:
     panel_b_path = source_root / "figure_3_within_celltype_detection_by_seed.csv"
-    panel_c_path = (
-        source_root / "figure_3_within_celltype_internal_contrasts_by_seed.csv"
-    )
+    panel_c_path = source_root / "figure_3_within_celltype_internal_contrasts_by_seed.csv"
     panel_d_path = source_root / "figure_3_matched_reference_by_seed.csv"
     panel_e_cells_path = source_root / "figure_3_destination_support_by_cell.parquet"
     panel_e_summary_path = source_root / "figure_3_destination_support_by_seed.csv"
@@ -3521,7 +3477,7 @@ def _draw_main_figure(
     _draw_composite_header(
         panel_d_header,
         "D",
-        "Matched full-reference response",
+        "Paired reference-restoration response",
         title_x=0.075,
     )
     panel_d_grid = panel_d_outer[1, 0].subgridspec(
@@ -3553,7 +3509,7 @@ def _draw_main_figure(
     _draw_composite_header(
         panel_e_header,
         "E",
-        "Destination versus support",
+        "Reference destination versus fitted mass retention",
         title_x=0.10,
     )
     panel_e_grid = panel_e_outer[1, 0].subgridspec(1, 3, wspace=0.18)
@@ -3576,7 +3532,7 @@ def _draw_main_figure(
     _draw_composite_header(
         panel_f_header,
         "F",
-        "Represented-cell-type transfer",
+        "",
         title_x=0.10,
     )
     panel_f_ax = fig.add_subplot(panel_f_grid[1, 0])
@@ -3634,11 +3590,7 @@ def _validate_review_crop(path: Path) -> None:
 
 
 def _validate_main_fonts(fig: plt.Figure) -> None:
-    sizes = [
-        float(text.get_fontsize())
-        for text in fig.findobj(match=Text)
-        if text.get_text()
-    ]
+    sizes = [float(text.get_fontsize()) for text in fig.findobj(match=Text) if text.get_text()]
     if not sizes or min(sizes) < MAIN_FIGURE_MIN_FONT_SIZE:
         raise PBMCFigure3Error(
             "Main Figure 3 contains text below the final-size font floor; "
@@ -3698,45 +3650,40 @@ def _software_versions() -> dict[str, str]:
 
 def _caption_text() -> str:
     return (
-        "**Figure 3. CoRe-OT detects limited reference support for "
-        "condition-specific PBMC states across cell types.** "
-        "**(A)** Donor-aware controlled-removal design. Stimulated cells of "
-        "the target type remain in the query but are removed from the "
-        "incomplete reference. The matched full reference restores the omitted "
-        "state for the same query. **(B)** Within-cell-type average precision "
-        "(AP) for ranking stimulated B, NK, and dendritic cells against control "
-        "cells of the same type. Small circles denote five fixed donor splits; "
-        "outlined circles and intervals denote arithmetic means and mean plus "
-        "or minus one sample standard deviation. Dashed lines denote mean "
-        "positive prevalence. Scores are method-specific and are compared "
-        "through AP rather than raw magnitude. **(C)** Matched full-reference "
-        "response for held-out stimulated cells and same-type controls. For "
-        "split $s$, the group-median deficit decrease is "
-        "$\\Delta^{\\mathrm{med}}_{g,s}=\\operatorname{median}_{i\\in"
-        "\\mathcal I_{g,s}}u_{i,s}^{\\mathrm{incomplete}}-"
-        "\\operatorname{median}_{i\\in\\mathcal I_{g,s}}u_{i,s}^{\\mathrm{full}}$. "
-        "The primary control-adjusted median-deficit decrease is "
-        "$\\Delta_s^{\\mathrm{CA}}=\\Delta^{\\mathrm{med}}_{\\mathrm{held},s}-"
-        "\\Delta^{\\mathrm{med}}_{\\mathrm{control},s}$. The aligned axis "
-        "reports the median cell-level conditional probability assigned to the "
-        "restored state. The provider PCA is fitted separately for the "
-        "incomplete and full references, so this is a matched pipeline response "
-        "rather than a coupling-only intervention. **(D)** Forced macro-F1 and "
-        "accuracy for broad cell-type labels among query cells whose states "
-        "remain represented in the incomplete reference. Bars and intervals "
-        "denote arithmetic means and mean plus or minus one sample standard "
-        "deviation across the five splits; the axis is truncated at 0.70. "
-        "**(E)** For prespecified seed 1, oracle-sized top-ranked weak-support "
-        "sets are shown on a common query UMAP for each endpoint and displayed "
-        "method. Selection is restricted to the within-cell-type cohort used "
-        "in Panel B. **(F)** Forced represented-state assignments on the same "
-        "endpoint-specific query coordinates for seed 1; held-out stimulated "
-        "cells are shown in gray and are excluded from the represented-state "
-        "evaluation. Panels E and F are descriptive spatial views and do not "
-        "constitute independent quantitative evidence. The displayed operating "
-        "points were selected descriptively from state-specific sensitivity "
-        "analyses using the corresponding held-out-state results and therefore "
-        "do not provide an unbiased confirmatory comparison.\n"
+        "**Figure 3. PBMC condition-specific reference omission and restoration.** "
+        "**(A) Controlled benchmark design.** Across five donor splits, stimulated B, "
+        "NK, and dendritic cells are analyzed in separate reference-omission scenarios. "
+        "The same query cells retain all states and the same reference donors are used; "
+        "the selected stimulated state is omitted in the reference-omitted condition "
+        "and restored in the paired restored-reference condition, while same-type "
+        "controls remain represented. **(B) Paired reference-restoration response.** "
+        "Bars show the decreases in median query-marginal deficit for reference-omitted "
+        "cells and same-type controls, the control-adjusted decrease "
+        "\\(\\Delta^{\\mathrm{CA}}\\), and the restored-state destination fraction. "
+        "The latter is the within-split median, among reference-omitted cells satisfying "
+        "\\(\\widehat a_{q,i}>\\eta\\) with \\(\\eta=10^{-12}\\), of the fraction "
+        "of transported mass assigned "
+        "to the restored state. **(C) Within-cell-type omitted-state ranking.** AP and "
+        "AUROC compare each omitted stimulated state with same-type controls. "
+        "**(D) Forced cell-type label transfer among represented states.** Forced "
+        "accuracy and forced macro-F1 are evaluated only for cells whose states remain "
+        "represented. Panels B--D use a common summary convention. Bar lengths are "
+        "arithmetic means across five donor splits; whiskers show one sample standard "
+        "deviation. Donor-split points are omitted, and all metric axes start at zero; "
+        "all four quantities in Panel B share a 0--1 metric-value axis. In Panel C, "
+        "solid bars show AP and hollow bars show AUROC; in Panel D, solid and hollow "
+        "bars show forced accuracy and forced macro-F1, respectively. Dashed lines in "
+        "Panel C show mean prevalence for AP; no AUROC 0.5 "
+        "reference is shown. Method colors in Panels C and D match Panel E. "
+        "**(E) Spatial localization of top-ranked cells.** For donor split 1, the "
+        "top-ranked \\(N_+\\) cells in each cell-type ranking cohort are shown on fixed "
+        "query coordinates for every Panel C method, where \\(N_+\\) is the number of "
+        "reference-omitted cells. Gray layers indicate selection status rather than "
+        "represented-state truth. **(F) Spatial view of forced cell-type assignments "
+        "among represented states.** Evaluation labels and method-specific assignments "
+        "among represented cell-type labels are shown on the corresponding coordinates "
+        "for donor split 1; row labels identify the reference-omission scenario. "
+        "Reference-omitted cells are gray and excluded from label-transfer evaluation.\n"
     )
 
 
@@ -3757,9 +3704,7 @@ def generate_review_panels(
     for letter in "ABCDEF":
         source_path = _panel_outputs(letter, docs_root)["png"]
         if not source_path.is_file():
-            raise PBMCFigure3Error(
-                f"Generate standalone Panel {letter} before its review image."
-            )
+            raise PBMCFigure3Error(f"Generate standalone Panel {letter} before its review image.")
         output_path = review_root / f"figure_3_pbmc_panel_{letter.lower()}.png"
         with Image.open(source_path) as image:
             image.convert("RGB").save(output_path)
@@ -3785,15 +3730,20 @@ def generate_main_figure(
     result_root.mkdir(parents=True, exist_ok=True)
     docs_root.mkdir(parents=True, exist_ok=True)
     result_outputs = {
-        suffix: result_root / f"figure_3_pbmc_main.{suffix}"
-        for suffix in ("png", "pdf", "svg")
+        suffix: result_root / f"figure_3_pbmc_main.{suffix}" for suffix in ("png", "pdf", "tiff")
     }
     docs_figure_root = docs_root / "figs"
     docs_figure_root.mkdir(parents=True, exist_ok=True)
     docs_outputs = {
         suffix: docs_figure_root / f"manuscript_fig_pbmc_main.{suffix}"
-        for suffix in ("png", "pdf", "svg")
+        for suffix in ("png", "pdf", "tiff")
     }
+    for legacy_svg in (
+        result_root / "figure_3_pbmc_main.svg",
+        docs_figure_root / "manuscript_fig_pbmc_main.svg",
+    ):
+        if legacy_svg.is_file():
+            legacy_svg.unlink()
 
     fig, _ = _draw_main_figure(
         panel_b,
@@ -3828,16 +3778,10 @@ def generate_main_figure(
             {
                 "stage": "manuscript-figure",
                 "figure": "PBMC condition-specific weak correspondence Figure 3",
-                "generator": (
-                    "experiments/pbmc_state/generate_pbmc_figure3_panels.py"
-                ),
+                "generator": ("experiments/pbmc_state/generate_pbmc_figure3_panels.py"),
                 "artifacts": {
-                    "result": {
-                        suffix: str(path) for suffix, path in result_outputs.items()
-                    },
-                    "manuscript": {
-                        suffix: str(path) for suffix, path in docs_outputs.items()
-                    },
+                    "result": {suffix: str(path) for suffix, path in result_outputs.items()},
+                    "manuscript": {suffix: str(path) for suffix, path in docs_outputs.items()},
                     "caption": str(caption_path),
                     "manuscript_caption": str(docs_caption_path),
                     "source_data_directory": str(source_root),
@@ -3850,12 +3794,8 @@ def generate_main_figure(
                 "endpoint_filters": {
                     "included": list(ENDPOINTS),
                     "excluded_main_figure": ["CD8 T cells"],
-                    "detection_positive": (
-                        "condition == stim and cell_type == held_out endpoint"
-                    ),
-                    "detection_negative": (
-                        "condition == ctrl and cell_type == held_out endpoint"
-                    ),
+                    "detection_positive": ("condition == stim and cell_type == held_out endpoint"),
+                    "detection_negative": ("condition == ctrl and cell_type == held_out endpoint"),
                     "unrelated_cell_types": "excluded from Panels B and C",
                 },
                 "metric_implementation": {
@@ -3871,9 +3811,7 @@ def generate_main_figure(
                         "coupling mass to selected target labels divided by a_hat "
                         f"for cells with a_hat > {TRANSPORT_ETA}"
                     ),
-                    "label_transfer": (
-                        "forced macro-F1 on represented cell-type labels"
-                    ),
+                    "label_transfer": ("forced macro-F1 on represented cell-type labels"),
                 },
                 "method_score_orientation": {
                     "all_detection_scores": "larger_is_weaker_reference_support",
@@ -3903,14 +3841,9 @@ def generate_main_figure(
                     "repository_worktree_dirty": _git_dirty(),
                     "sha256": _file_sha256(plotting_script),
                 },
-                "source_data_sha256": {
-                    str(path): _file_sha256(path) for path in source_paths
-                },
+                "source_data_sha256": {str(path): _file_sha256(path) for path in source_paths},
                 "regeneration_commands": [
-                    (
-                        "uv run python "
-                        "experiments/pbmc_state/generate_pbmc_compare_baseline.py"
-                    ),
+                    ("uv run python experiments/pbmc_state/generate_pbmc_compare_baseline.py"),
                     (
                         "uv run python "
                         "experiments/pbmc_state/generate_pbmc_figure3_panels.py "
@@ -3924,12 +3857,13 @@ def generate_main_figure(
                 ],
                 "interpretation_limits": [
                     (
-                        "The matched full-reference response refits the provider PCA "
+                        "The paired reference-restoration response refits the input PCA "
                         "for each reference condition."
                     ),
                     (
-                        "Displayed operating points were selected descriptively "
-                        "using held-out-state sensitivity results."
+                        "The displayed settings were selected post hoc using the "
+                        "same endpoints and donor splits; the spatial panels are not "
+                        "independent quantitative evidence."
                     ),
                     (
                         "Split-level variability is descriptive and not a "

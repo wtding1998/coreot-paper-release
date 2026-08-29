@@ -357,6 +357,60 @@ def validate_submission_release(package_root: str | Path) -> ReleaseValidation:
     )
 
 
+def derive_clean_submission_release(
+    *,
+    source_root: str | Path,
+    output_root: str | Path,
+) -> ReleaseValidation:
+    """Copy declared release bytes from a candidate contaminated only by caches."""
+
+    source = Path(source_root).resolve()
+    output = Path(output_root).resolve()
+    if not source.is_dir():
+        raise SubmissionReleaseError(f"Release root does not exist: {source}")
+    if source == output or source in output.parents or output in source.parents:
+        raise SubmissionReleaseError(
+            "Clean release source and output roots must be separate directories"
+        )
+    if output.exists() and (not output.is_dir() or any(output.iterdir())):
+        raise FileExistsError(f"Refusing to overwrite nonempty release root: {output}")
+    if any(path.is_symlink() for path in source.rglob("*")):
+        raise SubmissionReleaseError("Release packages must not contain symbolic links")
+
+    checksum_path = source / "provenance/checksums.sha256"
+    declared = _verify_checksum_manifest(source, checksum_path)
+    actual = {
+        path.relative_to(source).as_posix()
+        for path in source.rglob("*")
+        if path.is_file() and path != checksum_path
+    }
+    undeclared = sorted(actual - declared)
+    noncache = [
+        relative
+        for relative in undeclared
+        if not (
+            Path(relative).parts[0] == "code"
+            and Path(relative).parent.name == "__pycache__"
+            and Path(relative).suffix.casefold() == ".pyc"
+        )
+    ]
+    if noncache:
+        raise SubmissionReleaseError(
+            "Refusing to derive a release with non-cache undeclared files: "
+            + ", ".join(noncache)
+        )
+
+    output.mkdir(parents=True, exist_ok=True)
+    for relative in sorted(declared):
+        destination = output / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / relative, destination)
+    destination_checksum = output / "provenance/checksums.sha256"
+    destination_checksum.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(checksum_path, destination_checksum)
+    return validate_submission_release(output)
+
+
 def format_release_audit(audit: ReleaseAudit) -> str:
     lines = [
         f"release_id={audit.release_id}",

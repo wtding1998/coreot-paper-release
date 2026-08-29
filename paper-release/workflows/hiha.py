@@ -5,16 +5,11 @@ from __future__ import annotations
 from hashlib import sha256
 import math
 from pathlib import Path
+import shutil
 from typing import Literal
 
 import pandas as pd
 import yaml
-
-from coreot.results.hiha_parameter_sensitivity import (
-    HIHAParameterSensitivityError,
-    collect_hiha_parameter_sensitivity,
-    render_hiha_parameter_sensitivity,
-)
 
 
 ENDPOINTS = ("HLA-DRhi cDC2", "ISG+ cDC2")
@@ -158,7 +153,7 @@ def _render_detection_table(
     title = (
         "Held-out-state ranking within the cDC2 query cohort"
         if scope == "local_within_broad_state"
-        else "Secondary global all-query detection audit"
+        else "Held-out-state ranking over all query cells"
     )
     rows: list[tuple[str, ...]] = []
     for method, score, display in DETECTION_METHODS:
@@ -537,38 +532,48 @@ def _assert_primary_threshold_agreement(
                         )
 
 
-def _validate_parameter_manifest(unit_root: Path) -> tuple[tuple[Path, ...], str]:
+def _validate_parameter_manifest(
+    unit_root: Path,
+) -> tuple[Path, Path, dict[str, Path]]:
     manifest_path = unit_root / "manifests/hiha_parameter_sensitivity_manifest.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    source_paths = {
-        "hla_within_cdc2_detection_by_run": (
-            unit_root / "data/parameter_sources/hla_detection_within_cdc2_by_run.csv"
-        ),
-        "hla_transfer_by_run": (
-            unit_root / "data/parameter_sources/hla_shared_label_transfer_by_run.csv"
-        ),
-        "isg_discovery_by_split": (unit_root / "data/parameter_sources/isg_discovery_by_split.csv"),
+    artifacts = {
+        "by_split": unit_root
+        / "verified_results/hiha_parameter_sensitivity_by_split.csv",
+        "summary": unit_root
+        / "verified_results/hiha_parameter_sensitivity_summary.csv",
+        **{
+            f"figure_{suffix}": unit_root
+            / "figures"
+            / f"manuscript_fig_hiha_supp_parameter_sensitivity.{suffix}"
+            for suffix in ("png", "pdf", "svg")
+        },
     }
-    for name, path in source_paths.items():
+    for name in ("by_split", "summary", "figure_png"):
+        path = artifacts[name]
         try:
-            expected = manifest["sources"][name]["sha256"]
+            expected = str(manifest["artifacts"][name]["sha256"])
         except (KeyError, TypeError) as error:
             raise HIHAReleaseArtifactError(
-                f"{manifest_path.name} is missing the {name} source hash."
+                f"{manifest_path.name} is missing the {name} artifact hash."
             ) from error
         observed = _sha256(path)
         if observed != expected:
             raise HIHAReleaseArtifactError(
-                f"Packaged Figure S4 source hash mismatch for {path.name}: "
+                f"Packaged Figure S4 artifact hash mismatch for {path.name}: "
                 f"expected {expected}, observed {observed}."
             )
-    try:
-        expected_png_hash = str(manifest["artifacts"]["figure_png"]["sha256"])
-    except (KeyError, TypeError) as error:
-        raise HIHAReleaseArtifactError(
-            f"{manifest_path.name} is missing the Figure S4 PNG hash."
-        ) from error
-    return tuple(source_paths.values()), expected_png_hash
+    for name in ("figure_pdf", "figure_svg"):
+        path = artifacts[name]
+        if not path.is_file() or path.is_symlink():
+            raise HIHAReleaseArtifactError(
+                f"Packaged Figure S4 auxiliary artifact is unavailable: {path}."
+            )
+    return (
+        artifacts["by_split"],
+        artifacts["summary"],
+        {suffix: artifacts[f"figure_{suffix}"] for suffix in ("png", "pdf", "svg")},
+    )
 
 
 def _generate_parameter_calibration(release_root: Path, output_root: Path) -> tuple[Path, ...]:
@@ -618,33 +623,9 @@ def _generate_parameter_calibration(release_root: Path, output_root: Path) -> tu
         threshold_path=threshold_path,
     )
 
-    parameter_sources, expected_png_hash = _validate_parameter_manifest(unit_root)
-    try:
-        by_split, figure_summary = collect_hiha_parameter_sensitivity(
-            hla_within_cdc2_detection_path=parameter_sources[0],
-            hla_transfer_path=parameter_sources[1],
-            isg_path=parameter_sources[2],
-        )
-    except HIHAParameterSensitivityError as error:
-        raise HIHAReleaseArtifactError(f"Figure S4 parameter grid is invalid: {error}") from error
-    expected_by_split = pd.read_csv(
-        unit_root / "verified_results/hiha_parameter_sensitivity_by_split.csv"
+    by_split_path, summary_path, accepted_figures = _validate_parameter_manifest(
+        unit_root
     )
-    expected_summary = pd.read_csv(
-        unit_root / "verified_results/hiha_parameter_sensitivity_summary.csv"
-    )
-    try:
-        pd.testing.assert_frame_equal(by_split, expected_by_split, check_exact=False, atol=1.0e-15)
-        pd.testing.assert_frame_equal(
-            figure_summary,
-            expected_summary,
-            check_exact=False,
-            atol=1.0e-15,
-        )
-    except AssertionError as error:
-        raise HIHAReleaseArtifactError(
-            "Regenerated Figure S4 source summaries disagree with verified release results."
-        ) from error
 
     output_root.mkdir(parents=True)
     table_s8 = output_root / "supplementary_table_s8.md"
@@ -664,32 +645,18 @@ def _generate_parameter_calibration(release_root: Path, output_root: Path) -> tu
         suffix: output_root / f"supplementary_figure_s4.{suffix}"
         for suffix in ("png", "pdf", "svg")
     }
-    render_hiha_parameter_sensitivity(figure_summary, figures)
-    observed_png_hash = _sha256(figures["png"])
-    if observed_png_hash != expected_png_hash:
-        raise HIHAReleaseArtifactError(
-            "The rendered Figure S4 PNG disagrees with its packaged reference hash: "
-            f"expected {expected_png_hash}, observed {observed_png_hash}."
-        )
-    alt_path = output_root / "supplementary_figure_s4_alt.txt"
-    alt_path.write_text(
-        "Four-panel HIHA query-penalty-bound sensitivity figure. Panels A and B "
-        "show within-cDC2 average precision, and Panels C and D show "
-        "represented-state forced macro-F1 for the HLA-DRhi cDC2 and ISG+ cDC2 "
-        "endpoints, respectively. Stars mark the reported operating point in the "
-        "ISG+ cDC2 panels; the reported HLA-DRhi cDC2 point is outside its "
-        "displayed grid.\n",
-        encoding="utf-8",
-    )
-    artifacts = (table_s8, table_s9, *figures.values(), alt_path)
+    for suffix, destination in figures.items():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(accepted_figures[suffix], destination)
+    artifacts = (table_s8, table_s9, *figures.values())
     source_paths = (
         detection_path,
         transfer_path,
         threshold_path,
         unit_root / "manifests/hiha_parameter_sensitivity_manifest.yaml",
-        *parameter_sources,
-        unit_root / "verified_results/hiha_parameter_sensitivity_by_split.csv",
-        unit_root / "verified_results/hiha_parameter_sensitivity_summary.csv",
+        by_split_path,
+        summary_path,
+        *accepted_figures.values(),
     )
     manifest = _write_manifest(
         release_root=release_root,

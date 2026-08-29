@@ -51,6 +51,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--docs-root", type=Path, default=DOCS_ROOT)
     parser.add_argument("--output-root", type=Path, default=RESULT_ROOT)
+    parser.add_argument(
+        "--source-root",
+        type=Path,
+        help="Explicit retained Figure 3 source-data root; required for --panel main or review.",
+    )
     parser.add_argument("--review-root", type=Path, default=REVIEW_ROOT)
     parser.add_argument("--runs-root", type=Path, default=RUNS_ROOT)
     parser.add_argument("--raw-data", type=Path, default=RAW_DATA_PATH)
@@ -111,7 +116,6 @@ def _generate_panel_source(
         )
     if panel == "supp-destination":
         return generate_destination_support_supplement(
-            docs_root=args.docs_root,
             result_root=args.output_root,
             comparison_path=args.comparison_path,
             raw_data_path=args.raw_data,
@@ -122,8 +126,18 @@ def _generate_panel_source(
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    source_root = args.output_root / "figure_3_pbmc_source_data"
+    source_root = (
+        args.source_root
+        if args.source_root is not None
+        else args.output_root / "figure_3_pbmc_source_data"
+    )
     if args.panel == "main":
+        if args.source_root is None:
+            raise ValueError("--source-root is required for --panel main")
+        if source_root.resolve() == args.output_root.resolve() or (
+            args.output_root.resolve() in source_root.resolve().parents
+        ):
+            raise ValueError("--source-root must be outside --output-root")
         artifacts = generate_main_figure(
             docs_root=args.docs_root,
             result_root=args.output_root,
@@ -133,6 +147,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(path)
         return 0
     if args.panel == "review":
+        if args.source_root is None:
+            raise ValueError("--source-root is required for --panel review")
         artifacts = generate_review_panels(
             review_root=args.review_root,
             source_root=source_root,

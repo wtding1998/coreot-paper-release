@@ -1,4 +1,4 @@
-# Supplementary Table S6. Secondary global all-query detection audit
+# Supplementary Table S6. Held-out-state ranking over all query cells
 
 Values are mean \(\pm\) sample standard deviation across five donor splits. AP denotes average precision.
 

@@ -36,14 +36,6 @@ PBMC_INTERNAL_BASELINES: tuple[dict[str, object], ...] = (
     {"name": "prior_only"},
     {"name": "nn"},
     {
-        "name": "balanced_ot",
-        "epsilon": 0.05,
-        "alpha": 0,
-        "max_iter": 2000,
-        "tol": 1.0e-6,
-        "numerical_floor": 1.0e-300,
-    },
-    {
         "name": "uniform_uot",
         "epsilon": 0.05,
         "tau_source": 1.0,
@@ -126,7 +118,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         internal_methods=(
             "prior_only",
             "nn",
-            "balanced_ot",
             "uniform_uot",
             "coreot_full",
             "coreot_match_only",

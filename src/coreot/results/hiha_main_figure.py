@@ -25,7 +25,6 @@ LABELS = ("HLA-DRhi cDC2", "ISG+ cDC2")
 METHODS = (
     ("coreot_full", "u", r"CoRe-OT ($u$)"),
     ("uniform_uot", "u", "Uniform UOT"),
-    ("balanced_ot", "label_uncertainty", "Balanced OT"),
     ("nn", "nn_distance", "Nearest neighbor"),
     ("prior_only", "prior_risk", "Prior only"),
     ("seurat_anchor", "u", "Seurat"),
@@ -42,7 +41,6 @@ OPERATIONAL = (
 COLORS = {
     "coreot_full": "#0072B2",
     "uniform_uot": "#3F3F3F",
-    "balanced_ot": "#7A7A7A",
     "nn": "#A0A0A0",
     "prior_only": "#BDBDBD",
     "seurat_anchor": "#E69F00",

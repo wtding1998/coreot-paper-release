@@ -76,6 +76,7 @@ def run_external_baselines(
         else keep_intermediates
     )
     chetah_config = _chetah_config(config)
+    celltypist_parameters = _celltypist_config(config, repeat=repeat)
     shared_counts_source = _optional_path(config, "model_visible_counts_source")
 
     methods_to_run = methods if force else _methods_missing_from_scores(
@@ -121,8 +122,15 @@ def run_external_baselines(
                     heldout_label=heldout_label,
                     repeat=repeat,
                     is_full_reference_control=is_full_reference,
+                    training_parameters=celltypist_parameters,
                 )
-                _write_predictions(run_root, condition, method, frame)
+                _write_predictions(
+                    run_root,
+                    condition,
+                    method,
+                    frame,
+                    parameters=celltypist_parameters,
+                )
             else:
                 _run_r_baseline(
                     run_root=run_root,
@@ -146,6 +154,11 @@ def run_external_baselines(
         threshold_quantile=threshold_quantile,
         threshold_mode=threshold_mode,
         method_parameters={
+            **(
+                {"celltypist_l3": celltypist_parameters}
+                if "celltypist_l3" in methods_to_run
+                else {}
+            ),
             "chetah": {
                 "native_threshold": 0.1,
                 "forced_threshold": 0.0,
@@ -282,6 +295,7 @@ def run_celltypist_l3(
     heldout_label: str,
     repeat: int,
     is_full_reference_control: bool,
+    training_parameters: dict[str, object] | None = None,
 ) -> pd.DataFrame:
     import celltypist
 
@@ -295,25 +309,55 @@ def run_celltypist_l3(
     qry = qry[:, common].copy()
     ref.obs["AIFI_L3"] = labels.loc[ref.obs_names, "target_label"].astype(str)
 
+    parameters = training_parameters or _celltypist_config({}, repeat=repeat)
+    profile = str(parameters["profile"])
+    random_state = int(parameters["random_state"])
+    train_kwargs = {
+        key: parameters[key]
+        for key in (
+            "use_SGD",
+            "with_mean",
+            "mini_batch",
+            "batch_number",
+            "batch_size",
+            "epochs",
+            "max_iter",
+            "n_jobs",
+            "random_state",
+        )
+        if key in parameters
+    }
+
     numpy_random_state = np.random.get_state()
-    np.random.seed(repeat)
+    np.random.seed(random_state)
     try:
         model = celltypist.train(
             ref,
             labels="AIFI_L3",
-            # CellTypist's non-SGD path passes a removed scikit-learn argument.
-            use_SGD=True,
-            # Centering converts the cell-by-gene sparse matrix to a dense array.
-            with_mean=False,
-            mini_batch=True,
-            batch_size=1000,
-            epochs=10,
-            n_jobs=-1,
-            random_state=repeat,
+            **train_kwargs,
         )
     finally:
         np.random.set_state(numpy_random_state)
-    probabilities = _celltypist_sparse_probabilities(qry, model)
+    if profile == "centered_full_sgd":
+        pred = celltypist.annotate(
+            qry,
+            model=model,
+            mode=str(parameters.get("annotation_mode", "best match")),
+            majority_voting=bool(parameters.get("majority_voting", False)),
+        )
+        probabilities = pred.probability_matrix.copy().loc[qry.obs_names]
+    else:
+        if "annotation_mode" in parameters or "probability_threshold" in parameters:
+            probabilities = _celltypist_sparse_probabilities(
+                qry,
+                model,
+                mode=str(parameters.get("annotation_mode", "best match")),
+                p_thres=float(parameters.get("probability_threshold", 0.5)),
+            )
+        else:
+            # Keep the existing helper call shape for integrations that patch
+            # the sparse probability extractor.
+            probabilities = _celltypist_sparse_probabilities(qry, model)
     max_score = probabilities.max(axis=1)
     return pd.DataFrame(
         {
@@ -331,7 +375,13 @@ def run_celltypist_l3(
     )
 
 
-def _celltypist_sparse_probabilities(qry: ad.AnnData, model: Any) -> pd.DataFrame:
+def _celltypist_sparse_probabilities(
+    qry: ad.AnnData,
+    model: Any,
+    *,
+    mode: str = "best match",
+    p_thres: float = 0.5,
+) -> pd.DataFrame:
     model_features = pd.Index(np.asarray(model.classifier.features).astype(str))
     query_features = pd.Index(qry.var_names.astype(str))
     query_indices = query_features.get_indexer(model_features)
@@ -346,8 +396,8 @@ def _celltypist_sparse_probabilities(qry: ad.AnnData, model: Any) -> pd.DataFram
     scaled.data[scaled.data > 10] = 10
     _, probability_matrix, _ = model.predict_labels_and_prob(
         scaled,
-        mode="best match",
-        p_thres=0.5,
+        mode=mode,
+        p_thres=p_thres,
     )
     return pd.DataFrame(
         probability_matrix,
@@ -804,12 +854,25 @@ def _remove_empty_parents(path: Path, *, stop_at: Path) -> None:
         current = current.parent
 
 
-def _write_predictions(run_root: Path, condition: str, method: str, frame: pd.DataFrame) -> None:
+def _write_predictions(
+    run_root: Path,
+    condition: str,
+    method: str,
+    frame: pd.DataFrame,
+    *,
+    parameters: dict[str, object] | None = None,
+) -> None:
     path = _prediction_path(run_root, condition, method)
     validated = validate_external_baseline_predictions(frame, method=method, source=str(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     validated.to_csv(path, index=False, columns=EXTERNAL_BASELINE_PREDICTION_COLUMNS)
-    _write_method_manifest(run_root, condition, method, path)
+    _write_method_manifest(
+        run_root,
+        condition,
+        method,
+        path,
+        parameters=parameters,
+    )
 
 
 def _write_method_manifest(
@@ -858,6 +921,64 @@ def _validate_methods(methods: tuple[str, ...]) -> None:
     unknown = sorted(set(methods) - set(EXTERNAL_BASELINE_METHODS))
     if unknown:
         raise ExternalBaselineError(f"Unsupported external baseline method(s): {unknown}")
+
+
+def _celltypist_config(config: dict[str, Any], *, repeat: int) -> dict[str, object]:
+    raw = config.get("celltypist", {})
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ExternalBaselineError("celltypist config must be a mapping")
+
+    profile = str(raw.get("profile", "sparse_minibatch"))
+    if profile not in {"sparse_minibatch", "centered_full_sgd"}:
+        raise ExternalBaselineError(
+            "celltypist.profile must be 'sparse_minibatch' or 'centered_full_sgd'"
+        )
+    random_state = int(raw.get("random_state", repeat))
+    common: dict[str, object] = {
+        "profile": profile,
+        "random_state": random_state,
+        "numpy_random_seed": random_state,
+        "use_SGD": True,
+    }
+    if profile == "centered_full_sgd":
+        return {
+            **common,
+            "with_mean": True,
+            "mini_batch": False,
+            "max_iter": 1000,
+            "n_jobs": 1,
+            "probability_path": "celltypist.annotate",
+            "annotation_mode": "best match",
+            "majority_voting": False,
+        }
+    resolved = {
+        **common,
+        "with_mean": False,
+        "mini_batch": True,
+        "batch_size": 1000,
+        "epochs": 10,
+        "n_jobs": -1,
+        "probability_path": "sparse_model_probability",
+    }
+    # The historical sparse profile intentionally keeps its -1 worker default.
+    # Provenance-certified callers may opt into a stricter single-worker
+    # contract without changing unrelated external-baseline workflows.
+    if "n_jobs" in raw:
+        resolved["n_jobs"] = int(raw["n_jobs"])
+    elif "worker_count" in raw:
+        resolved["n_jobs"] = int(raw["worker_count"])
+    for key in (
+        "batch_number",
+        "max_iter",
+        "annotation_mode",
+        "probability_threshold",
+        "majority_voting",
+    ):
+        if key in raw:
+            resolved[key] = raw[key]
+    return resolved
 
 
 def _chetah_config(config: dict[str, Any]) -> dict[str, int | None]:

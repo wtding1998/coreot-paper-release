@@ -14,7 +14,7 @@ import pandas as pd
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
 import yaml
 
-from coreot.submission import validate_submission_release
+from .release_validation import validate_submission_release
 
 
 CSV_ATOL = 1.0e-12
@@ -64,6 +64,52 @@ def _validate_output(release: Path, output_root: str | Path) -> Path:
     return output
 
 
+def _validate_complete_fit_fields(
+    by_fit: pd.DataFrame,
+    coverage: pd.DataFrame,
+) -> None:
+    if not coverage["n_without_per_fit_record"].astype(int).eq(0).all():
+        return
+    required = {
+        "experiment",
+        "analysis_family",
+        "endpoint",
+        "seed",
+        "condition",
+        "run_id",
+        "method",
+        "convergence_evidence",
+        "converged",
+        "n_iter",
+        "max_iter",
+        "tol",
+        "source_artifact",
+    }
+    missing = sorted(required - set(by_fit.columns))
+    if missing:
+        raise ConvergenceReleaseError(
+            f"Complete convergence evidence omits required fields {missing}."
+        )
+    numeric = by_fit.loc[:, ["n_iter", "max_iter", "tol"]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+    if (
+        not by_fit["convergence_evidence"].eq("verified_converged").all()
+        or not by_fit["converged"].astype(str).str.casefold().eq("true").all()
+        or not numeric.notna().all().all()
+        or not numeric["n_iter"].gt(0).all()
+        or not numeric["max_iter"].gt(0).all()
+        or not numeric["n_iter"].le(numeric["max_iter"]).all()
+        or not numeric["tol"].gt(0).all()
+        or by_fit["source_artifact"].isna().any()
+        or by_fit["source_artifact"].astype(str).str.strip().eq("").any()
+    ):
+        raise ConvergenceReleaseError(
+            "Complete convergence evidence contains an invalid retained fit record."
+        )
+
+
 def _recompute_convergence(reference_root: Path, output_root: Path) -> None:
     source_by_fit = reference_root / "transport_convergence_by_fit.csv"
     output_by_fit = output_root / "transport_convergence_by_fit.csv"
@@ -83,6 +129,7 @@ def _recompute_convergence(reference_root: Path, output_root: Path) -> None:
     summary.to_csv(output_root / "transport_convergence_summary.csv", index=False)
 
     reference_coverage = pd.read_csv(reference_root / "retained_analysis_coverage.csv")
+    _validate_complete_fit_fields(by_fit, reference_coverage)
     counts = (
         by_fit.assign(_without=by_fit["convergence_evidence"].eq(UNAVAILABLE))
         .groupby(["experiment", "analysis_family"], sort=False, dropna=False)
@@ -120,12 +167,29 @@ def _recompute_convergence(reference_root: Path, output_root: Path) -> None:
 
 
 def _recompute_resources(reference_root: Path, output_root: Path) -> None:
-    frames: list[pd.DataFrame] = []
+    frames_by_dataset: dict[str, pd.DataFrame] = {}
     for filename in RESOURCE_DATASET_FILES:
         source = reference_root / filename
         shutil.copyfile(source, output_root / filename)
-        frames.append(pd.read_csv(source))
-    combined = pd.concat(frames, ignore_index=True)
+        frame = pd.read_csv(source)
+        datasets = frame["dataset"].drop_duplicates().astype(str).tolist()
+        if len(datasets) != 1 or datasets[0] in frames_by_dataset:
+            raise ConvergenceReleaseError(
+                f"Resource input {filename} must contain one unique dataset."
+            )
+        frames_by_dataset[datasets[0]] = frame
+    reference_combined = pd.read_csv(reference_root / "compare_baselines_by_method.csv")
+    dataset_order = (
+        reference_combined["dataset"].drop_duplicates().astype(str).tolist()
+    )
+    if set(dataset_order) != set(frames_by_dataset):
+        raise ConvergenceReleaseError(
+            "Resource aggregate dataset membership differs from its dataset inputs."
+        )
+    combined = pd.concat(
+        [frames_by_dataset[dataset] for dataset in dataset_order],
+        ignore_index=True,
+    )
     combined.to_csv(output_root / "compare_baselines_by_method.csv", index=False)
     summary = (
         combined.groupby(["dataset", "measurement_status"], sort=True, dropna=False)

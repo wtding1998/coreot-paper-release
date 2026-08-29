@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import json
 from pathlib import Path
 from typing import Iterable
 
@@ -15,17 +16,18 @@ from sklearn.metrics import average_precision_score
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
 
 from coreot.config.load import load_yaml
 
 
 ENDPOINTS = ("HLA-DRhi cDC2", "ISG+ cDC2")
 SEEDS = (1, 2, 3, 4, 5)
-HLA_TAU_MIN = (1.0, 1.5, 2.0)
-HLA_TAU_MAX = (2.0, 2.5, 3.0)
+HLA_TAU_MIN = (2.0, 2.5, 3.0)
+HLA_TAU_MAX = (2.5, 3.0, 3.5)
 ISG_TAU_MIN = (0.375, 0.5, 0.625)
 ISG_TAU_MAX = (0.625, 0.75, 1.0)
+LEGACY_HLA_TAU_MIN = (1.0, 1.5, 2.0)
+LEGACY_HLA_TAU_MAX = (2.0, 2.5, 3.0)
 PARAMETERS = {
     "HLA-DRhi cDC2": {
         "tau_min": HLA_TAU_MIN,
@@ -40,11 +42,30 @@ PARAMETERS = {
         "alpha": 0.25,
     },
 }
-REPORTED_OPERATING_POINTS = {
+LEGACY_PARAMETERS = {
+    **PARAMETERS,
+    "HLA-DRhi cDC2": {
+        "tau_min": LEGACY_HLA_TAU_MIN,
+        "tau_max": LEGACY_HLA_TAU_MAX,
+        "tau_reference": 2.0,
+        "alpha": 2.0,
+    },
+}
+SELECTED_SETTINGS = {
     "HLA-DRhi cDC2": (2.5, 3.0),
     "ISG+ cDC2": (0.5, 0.625),
 }
+H1_SPLIT_METRICS_RELATIVE = Path(
+    "results/phase2_review/H1/2026-08-21-execution-v4/tables/h1_split_metrics.csv"
+)
+H1_VERIFICATION_RELATIVE = Path(
+    "results/phase2_review/H1/2026-08-21-execution-v4/audit/h1_verification_report.json"
+)
+H1_CHECKSUMS_RELATIVE = Path(
+    "results/phase2_review/H1/2026-08-21-execution-v4/manifests/checksums.sha256"
+)
 RASTER_DPI = 350
+SVG_HASH_SALT = "coreot-hiha-parameter-sensitivity"
 
 
 class HIHAParameterSensitivityError(RuntimeError):
@@ -67,13 +88,47 @@ def _in_grid(values: pd.Series, expected: tuple[float, ...]) -> pd.Series:
     )
 
 
-def _validate_keys(frame: pd.DataFrame, *, label: str) -> None:
+def _validate_h1_checksums(
+    checksums_path: Path,
+    *,
+    split_metrics_path: Path,
+    verification_path: Path,
+) -> None:
+    declared: dict[str, str] = {}
+    for line in checksums_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        digest, relative = line.split(maxsplit=1)
+        declared[relative.strip()] = digest
+    expected = {
+        "tables/h1_split_metrics.csv": split_metrics_path,
+        "audit/h1_verification_report.json": verification_path,
+    }
+    mismatches = {
+        relative: (declared.get(relative), _sha256_file(path))
+        for relative, path in expected.items()
+        if declared.get(relative) != _sha256_file(path)
+    }
+    if mismatches:
+        raise HIHAParameterSensitivityError(
+            f"The H1 sources disagree with the immutable-root checksums: {mismatches}."
+        )
+
+
+def _validate_keys(
+    frame: pd.DataFrame,
+    *,
+    label: str,
+    parameters: dict[str, dict[str, object]],
+    ordered_bound_endpoints: tuple[str, ...] = (),
+) -> None:
     expected = {
         (endpoint, seed, tau_min, tau_max)
         for endpoint in ENDPOINTS
         for seed in SEEDS
-        for tau_min in PARAMETERS[endpoint]["tau_min"]
-        for tau_max in PARAMETERS[endpoint]["tau_max"]
+        for tau_min in parameters[endpoint]["tau_min"]
+        for tau_max in parameters[endpoint]["tau_max"]
+        if endpoint not in ordered_bound_endpoints or tau_min <= tau_max
     }
     observed = set(
         frame[["held_out_label", "seed", "tau_min", "tau_max"]].itertuples(
@@ -111,23 +166,19 @@ def build_hla_within_cdc2_detection(
     transfer = transfer.loc[
         transfer["held_out_label"].eq("HLA-DRhi cDC2")
         & transfer["method"].eq("coreot_full")
-        & _in_grid(transfer["tau_min"], HLA_TAU_MIN)
-        & _in_grid(transfer["tau_max"], HLA_TAU_MAX),
+        & _in_grid(transfer["tau_min"], LEGACY_HLA_TAU_MIN)
+        & _in_grid(transfer["tau_max"], LEGACY_HLA_TAU_MAX),
         list(required),
     ].copy()
     if transfer.duplicated(["run_id"]).any():
-        raise HIHAParameterSensitivityError(
-            f"Duplicate HLA run IDs in {transfer_path}."
-        )
+        raise HIHAParameterSensitivityError(f"Duplicate HLA run IDs in {transfer_path}.")
 
     configured_inputs: set[Path] = set()
     for run_id in transfer["run_id"].astype(str):
         config_path = grid_dir / run_id / "raw_import.yaml"
         config = load_yaml(config_path)
         input_path = Path(config["input"]["path"])
-        configured_inputs.add(
-            input_path if input_path.is_absolute() else project_root / input_path
-        )
+        configured_inputs.add(input_path if input_path.is_absolute() else project_root / input_path)
     if len(configured_inputs) != 1:
         raise HIHAParameterSensitivityError(
             "The HLA sensitivity grid must use one common input dataset; "
@@ -148,28 +199,18 @@ def build_hla_within_cdc2_detection(
     for parameter_row in transfer.itertuples(index=False):
         run_root = runs_root / str(parameter_row.run_id)
         score_path = (
-            run_root
-            / "scoring/incomplete_reference/hiha_harmony30_k100/cell_scores.parquet"
+            run_root / "scoring/incomplete_reference/hiha_harmony30_k100/cell_scores.parquet"
         )
-        truth_path = (
-            run_root
-            / "benchmark/incomplete_reference/evaluation_truth/query_truth.csv"
-        )
+        truth_path = run_root / "benchmark/incomplete_reference/evaluation_truth/query_truth.csv"
         scores = pd.read_parquet(score_path)
         _require_columns(scores, ("cell_id", "method", "u"), score_path)
-        scores = scores.loc[
-            scores["method"].eq("coreot_full"), ["cell_id", "u"]
-        ].copy()
+        scores = scores.loc[scores["method"].eq("coreot_full"), ["cell_id", "u"]].copy()
         if scores.empty or scores["cell_id"].duplicated().any():
-            raise HIHAParameterSensitivityError(
-                f"Invalid CoRe-OT cell scores in {score_path}."
-            )
+            raise HIHAParameterSensitivityError(f"Invalid CoRe-OT cell scores in {score_path}.")
         truth = pd.read_csv(truth_path)
         _require_columns(truth, ("cell_id", "is_absent_state"), truth_path)
         if truth["cell_id"].duplicated().any():
-            raise HIHAParameterSensitivityError(
-                f"Duplicate query cell IDs in {truth_path}."
-            )
+            raise HIHAParameterSensitivityError(f"Duplicate query cell IDs in {truth_path}.")
         joined = scores.merge(truth, on="cell_id", validate="one_to_one").merge(
             metadata, on="cell_id", validate="one_to_one"
         )
@@ -204,9 +245,117 @@ def build_hla_within_cdc2_detection(
                 "input_sha256": input_hash,
             }
         )
-    return pd.DataFrame(rows).sort_values(["tau_min", "tau_max", "seed"]).reset_index(
+    return pd.DataFrame(rows).sort_values(["tau_min", "tau_max", "seed"]).reset_index(drop=True)
+
+
+def _load_isg_sensitivity(isg_path: Path) -> pd.DataFrame:
+    isg = pd.read_csv(isg_path)
+    _require_columns(
+        isg,
+        (
+            "run_id",
+            "seed",
+            "tau_min",
+            "tau_max",
+            "tau_reference",
+            "alpha",
+            "coreot_auprc",
+            "coreot_forced_macro_f1",
+        ),
+        isg_path,
+    )
+    isg = isg.loc[
+        _in_grid(isg["tau_min"], ISG_TAU_MIN) & _in_grid(isg["tau_max"], ISG_TAU_MAX)
+    ].copy()
+    isg["held_out_label"] = "ISG+ cDC2"
+    isg["method"] = "coreot_full"
+    isg["auprc"] = isg["coreot_auprc"]
+    isg["forced_macro_f1"] = isg["coreot_forced_macro_f1"]
+    isg["source_analysis"] = "isg_tau_range_target1_alpha025_discovery"
+    return isg
+
+
+def _summarize_sensitivity(
+    hla: pd.DataFrame,
+    isg: pd.DataFrame,
+    *,
+    parameters: dict[str, dict[str, object]],
+    ordered_bound_endpoints: tuple[str, ...] = (),
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    columns = [
+        "run_id",
+        "held_out_label",
+        "seed",
+        "method",
+        "tau_min",
+        "tau_max",
+        "tau_reference",
+        "alpha",
+        "auprc",
+        "forced_macro_f1",
+        "source_analysis",
+    ]
+    by_split = pd.concat([hla[columns], isg[columns]], ignore_index=True)
+    numeric_columns = (
+        "tau_min",
+        "tau_max",
+        "tau_reference",
+        "alpha",
+        "auprc",
+        "forced_macro_f1",
+    )
+    by_split[list(numeric_columns)] = by_split[list(numeric_columns)].astype(float)
+    by_split["seed"] = by_split["seed"].astype(int)
+    key_columns = ["held_out_label", "seed", "tau_min", "tau_max"]
+    if by_split.duplicated(key_columns).any():
+        raise HIHAParameterSensitivityError(
+            "HIHA parameter sensitivity contains duplicate endpoint/split/grid keys."
+        )
+    _validate_keys(
+        by_split,
+        label="HIHA parameter sensitivity",
+        parameters=parameters,
+        ordered_bound_endpoints=ordered_bound_endpoints,
+    )
+    if not by_split.groupby("held_out_label")["alpha"].nunique().eq(1).all():
+        raise HIHAParameterSensitivityError("Alpha must be fixed within each endpoint.")
+    if not by_split.groupby("held_out_label")["tau_reference"].nunique().eq(1).all():
+        raise HIHAParameterSensitivityError(
+            "The reference penalty must be fixed within each endpoint."
+        )
+
+    summary = (
+        by_split.groupby(
+            [
+                "held_out_label",
+                "tau_min",
+                "tau_max",
+                "tau_reference",
+                "alpha",
+                "source_analysis",
+            ],
+            sort=True,
+        )
+        .agg(
+            within_cdc2_ap_mean=("auprc", "mean"),
+            within_cdc2_ap_std=("auprc", lambda values: values.std(ddof=1)),
+            represented_state_forced_macro_f1_mean=("forced_macro_f1", "mean"),
+            represented_state_forced_macro_f1_std=(
+                "forced_macro_f1",
+                lambda values: values.std(ddof=1),
+            ),
+            n_splits=("seed", "nunique"),
+        )
+        .reset_index()
+    )
+    if not summary["n_splits"].eq(len(SEEDS)).all():
+        raise HIHAParameterSensitivityError(
+            "Every sensitivity cell must contain five donor splits."
+        )
+    by_split = by_split.sort_values(["held_out_label", "tau_min", "tau_max", "seed"]).reset_index(
         drop=True
     )
+    return by_split, summary
 
 
 def collect_hiha_parameter_sensitivity(
@@ -215,7 +364,7 @@ def collect_hiha_parameter_sensitivity(
     hla_transfer_path: Path,
     isg_path: Path,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Collect split-level values and donor-equal summaries for the figure."""
+    """Collect the historical Figure S4 sources retained in release packages."""
     hla_detection = pd.read_csv(hla_within_cdc2_detection_path)
     _require_columns(
         hla_detection,
@@ -272,98 +421,98 @@ def collect_hiha_parameter_sensitivity(
         validate="one_to_one",
     )
     hla = hla.loc[
-        _in_grid(hla["tau_min"], HLA_TAU_MIN) & _in_grid(hla["tau_max"], HLA_TAU_MAX)
+        _in_grid(hla["tau_min"], LEGACY_HLA_TAU_MIN) & _in_grid(hla["tau_max"], LEGACY_HLA_TAU_MAX)
     ].copy()
     hla["tau_reference"] = 2.0
     hla["source_analysis"] = "full_tau_target2_alpha2_hla"
+    return _summarize_sensitivity(
+        hla,
+        _load_isg_sensitivity(isg_path),
+        parameters=LEGACY_PARAMETERS,
+    )
 
-    isg = pd.read_csv(isg_path)
+
+def collect_hiha_parameter_sensitivity_from_h1(
+    *,
+    hla_split_metrics_path: Path,
+    hla_verification_path: Path,
+    hla_checksums_path: Path,
+    isg_path: Path,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Collect the verified H1 grid and the retained ISG grid for Figure S4."""
+    _validate_h1_checksums(
+        hla_checksums_path,
+        split_metrics_path=hla_split_metrics_path,
+        verification_path=hla_verification_path,
+    )
+    verification = json.loads(hla_verification_path.read_text(encoding="utf-8"))
+    required_verification = {
+        "unit_id": "phase2_h1_hiha_hladrhi",
+        "execution_version": "2026-08-21-execution-v4",
+        "status": "verified",
+        "passed": True,
+        "expected_case_count": 40,
+        "observed_case_count": 40,
+        "valid_case_count": 40,
+        "selection_performed": False,
+        "selected_cell_unchanged": True,
+    }
+    mismatches = {
+        key: (verification.get(key), expected)
+        for key, expected in required_verification.items()
+        if verification.get(key) != expected
+    }
+    selected_cell = verification.get("selected_cell", {})
+    if mismatches or selected_cell != {"tau_max": 3.0, "tau_min": 2.5}:
+        raise HIHAParameterSensitivityError(
+            f"The H1 verification report does not authorize Figure S4 integration; "
+            f"mismatches={mismatches}, selected_cell={selected_cell}."
+        )
+
+    source = pd.read_csv(hla_split_metrics_path)
     _require_columns(
-        isg,
+        source,
         (
-            "run_id",
+            "endpoint",
+            "condition",
             "seed",
             "tau_min",
             "tau_max",
-            "tau_reference",
-            "alpha",
-            "coreot_auprc",
-            "coreot_forced_macro_f1",
+            "run_id",
+            "is_selected_cell",
+            "within_cdc2_ap",
+            "represented_state_forced_macro_f1",
         ),
-        isg_path,
+        hla_split_metrics_path,
     )
-    isg = isg.loc[
-        _in_grid(isg["tau_min"], ISG_TAU_MIN) & _in_grid(isg["tau_max"], ISG_TAU_MAX)
+    hla = source.loc[
+        source["endpoint"].eq("HLA-DRhi cDC2")
+        & source["condition"].eq("incomplete_reference")
+        & _in_grid(source["tau_min"], HLA_TAU_MIN)
+        & _in_grid(source["tau_max"], HLA_TAU_MAX)
+        & source["tau_min"].le(source["tau_max"])
     ].copy()
-    isg["held_out_label"] = "ISG+ cDC2"
-    isg["method"] = "coreot_full"
-    isg["auprc"] = isg["coreot_auprc"]
-    isg["forced_macro_f1"] = isg["coreot_forced_macro_f1"]
-    isg["source_analysis"] = "isg_tau_range_target1_alpha025_discovery"
-
-    columns = [
-        "run_id",
-        "held_out_label",
-        "seed",
-        "method",
-        "tau_min",
-        "tau_max",
-        "tau_reference",
-        "alpha",
-        "auprc",
-        "forced_macro_f1",
-        "source_analysis",
-    ]
-    by_split = pd.concat([hla[columns], isg[columns]], ignore_index=True)
-    numeric_columns = (
-        "tau_min",
-        "tau_max",
-        "tau_reference",
-        "alpha",
-        "auprc",
-        "forced_macro_f1",
+    selected_flag = hla["is_selected_cell"].map(
+        {True: True, False: False, "True": True, "False": False}
     )
-    by_split[list(numeric_columns)] = by_split[list(numeric_columns)].astype(float)
-    by_split["seed"] = by_split["seed"].astype(int)
-    _validate_keys(by_split, label="HIHA parameter sensitivity")
-    if not by_split.groupby("held_out_label")["alpha"].nunique().eq(1).all():
-        raise HIHAParameterSensitivityError("Alpha must be fixed within each endpoint.")
-    if not by_split.groupby("held_out_label")["tau_reference"].nunique().eq(1).all():
+    expected_selected = hla["tau_min"].eq(2.5) & hla["tau_max"].eq(3.0)
+    if selected_flag.isna().any() or not selected_flag.eq(expected_selected).all():
         raise HIHAParameterSensitivityError(
-            "The reference penalty must be fixed within each endpoint."
+            "The H1 selected-cell flags disagree with the unchanged selected setting."
         )
-
-    summary = (
-        by_split.groupby(
-            [
-                "held_out_label",
-                "tau_min",
-                "tau_max",
-                "tau_reference",
-                "alpha",
-                "source_analysis",
-            ],
-            sort=True,
-        )
-        .agg(
-            within_cdc2_ap_mean=("auprc", "mean"),
-            within_cdc2_ap_std=("auprc", lambda values: values.std(ddof=1)),
-            represented_state_forced_macro_f1_mean=("forced_macro_f1", "mean"),
-            represented_state_forced_macro_f1_std=(
-                "forced_macro_f1",
-                lambda values: values.std(ddof=1),
-            ),
-            n_splits=("seed", "nunique"),
-        )
-        .reset_index()
+    hla["held_out_label"] = hla["endpoint"]
+    hla["method"] = "coreot_full"
+    hla["tau_reference"] = 2.0
+    hla["alpha"] = 2.0
+    hla["auprc"] = hla["within_cdc2_ap"]
+    hla["forced_macro_f1"] = hla["represented_state_forced_macro_f1"]
+    hla["source_analysis"] = "phase2_h1_hiha_hladrhi_2026-08-21-execution-v4"
+    return _summarize_sensitivity(
+        hla,
+        _load_isg_sensitivity(isg_path),
+        parameters=PARAMETERS,
+        ordered_bound_endpoints=("HLA-DRhi cDC2",),
     )
-    if not summary["n_splits"].eq(len(SEEDS)).all():
-        raise HIHAParameterSensitivityError(
-            "Every sensitivity cell must contain five donor splits."
-        )
-    return by_split.sort_values(["held_out_label", "tau_min", "tau_max", "seed"]).reset_index(
-        drop=True
-    ), summary
 
 
 def _matrix(
@@ -371,15 +520,18 @@ def _matrix(
     endpoint: str,
     column: str,
 ) -> tuple[np.ndarray, tuple[float, ...], tuple[float, ...]]:
-    tau_min_values = PARAMETERS[endpoint]["tau_min"]
-    tau_max_values = PARAMETERS[endpoint]["tau_max"]
     subset = summary.loc[summary["held_out_label"].eq(endpoint)]
+    tau_min_values = tuple(sorted(subset["tau_min"].astype(float).unique()))
+    tau_max_values = tuple(sorted(subset["tau_max"].astype(float).unique()))
     matrix = np.full((len(tau_min_values), len(tau_max_values)), np.nan)
     for row in subset.itertuples(index=False):
         row_index = tau_min_values.index(float(row.tau_min))
         column_index = tau_max_values.index(float(row.tau_max))
         matrix[row_index, column_index] = float(getattr(row, column))
-    if np.isnan(matrix).any():
+    missing_valid_cell = np.isnan(matrix) & np.asarray(
+        [[tau_min <= tau_max for tau_max in tau_max_values] for tau_min in tau_min_values]
+    )
+    if missing_valid_cell.any():
         raise HIHAParameterSensitivityError(f"The {column} heatmap is incomplete for {endpoint}.")
     return matrix, tau_min_values, tau_max_values
 
@@ -390,7 +542,12 @@ def _save_figure(fig: plt.Figure, outputs: dict[str, Path]) -> None:
         kwargs: dict[str, object] = {"bbox_inches": "tight"}
         if suffix == "png":
             kwargs["dpi"] = RASTER_DPI
-        fig.savefig(path, **kwargs)
+        elif suffix == "pdf":
+            kwargs["metadata"] = {"CreationDate": None, "ModDate": None}
+        elif suffix == "svg":
+            kwargs["metadata"] = {"Date": None}
+        with plt.rc_context({"svg.hashsalt": SVG_HASH_SALT}):
+            fig.savefig(path, **kwargs)
         if suffix == "svg":
             content = path.read_text(encoding="utf-8")
             path.write_text(
@@ -436,10 +593,15 @@ def render_hiha_parameter_sensitivity(
         for endpoint_index, endpoint in enumerate(ENDPOINTS):
             axis = axes[metric_index][endpoint_index]
             matrix, tau_min_values, tau_max_values = _matrix(summary, endpoint, column)
+            color_map = (
+                matplotlib.colormaps["RdBu_r"].with_extremes(bad="#E6E6E6")
+                if np.isnan(matrix).any()
+                else "RdBu_r"
+            )
             image = axis.imshow(
                 matrix,
                 origin="lower",
-                cmap="RdBu_r",
+                cmap=color_map,
                 vmin=vmin,
                 vmax=vmax,
                 aspect="auto",
@@ -447,6 +609,8 @@ def render_hiha_parameter_sensitivity(
             for row_index in range(matrix.shape[0]):
                 for column_index in range(matrix.shape[1]):
                     value = matrix[row_index, column_index]
+                    if np.isnan(value):
+                        continue
                     scaled = (value - vmin) / (vmax - vmin)
                     axis.text(
                         column_index,
@@ -457,32 +621,6 @@ def render_hiha_parameter_sensitivity(
                         fontsize=6.2,
                         color=("white" if scaled < 0.22 or scaled > 0.82 else "#1F1F1F"),
                     )
-            reported_tau_min, reported_tau_max = REPORTED_OPERATING_POINTS[endpoint]
-            if (
-                reported_tau_min in tau_min_values
-                and reported_tau_max in tau_max_values
-            ):
-                selected_row = tau_min_values.index(reported_tau_min)
-                selected_column = tau_max_values.index(reported_tau_max)
-                axis.add_patch(
-                    Rectangle(
-                        (selected_column - 0.48, selected_row - 0.48),
-                        0.96,
-                        0.96,
-                        fill=False,
-                        edgecolor="white",
-                        linewidth=1.8,
-                    )
-                )
-                axis.scatter(
-                    selected_column - 0.32,
-                    selected_row + 0.32,
-                    marker="*",
-                    s=38,
-                    color="white",
-                    edgecolor="#202020",
-                    linewidth=0.4,
-                )
             axis.set_xticks(
                 range(len(tau_max_values)),
                 [f"{value:g}" for value in tau_max_values],
@@ -522,35 +660,21 @@ def write_hiha_parameter_sensitivity(
     *,
     project_root: Path = Path("."),
 ) -> dict[str, Path]:
-    """Write source tables, figure formats, alt text, and a provenance manifest."""
+    """Write source tables, figure formats, and a provenance manifest."""
     project_root = project_root.resolve()
-    hla_root = project_root / "results/HIHA_DC/sensitivity/full_tau_target2_alpha2_hla/tables"
     isg_root = (
         project_root / "results/HIHA_DC/sensitivity/isg_tau_range_target1_alpha025_discovery/tables"
     )
-    hla_transfer_path = hla_root / "shared_label_transfer_by_run.csv"
-    hla_within_cdc2_detection_path = hla_root / "detection_within_cdc2_by_run.csv"
-    hla_within_cdc2_detection = build_hla_within_cdc2_detection(
-        project_root=project_root,
-        runs_root=project_root / "runs",
-        grid_dir=(
-            project_root
-            / "experiments/missing_celltype/generated_configs/"
-            "hiha_dc_coreot_full_tau_target2_alpha2_hla_grid"
-        ),
-        transfer_path=hla_transfer_path,
-    )
-    hla_within_cdc2_detection.to_csv(hla_within_cdc2_detection_path, index=False)
     source_paths = {
-        "hla_within_cdc2_detection_by_run": hla_within_cdc2_detection_path,
-        "hla_transfer_by_run": hla_transfer_path,
+        "hla_h1_split_metrics": project_root / H1_SPLIT_METRICS_RELATIVE,
+        "hla_h1_verification_report": project_root / H1_VERIFICATION_RELATIVE,
+        "hla_h1_checksums": project_root / H1_CHECKSUMS_RELATIVE,
         "isg_discovery_by_split": isg_root / "discovery_by_split.csv",
     }
-    by_split, summary = collect_hiha_parameter_sensitivity(
-        hla_within_cdc2_detection_path=source_paths[
-            "hla_within_cdc2_detection_by_run"
-        ],
-        hla_transfer_path=source_paths["hla_transfer_by_run"],
+    by_split, summary = collect_hiha_parameter_sensitivity_from_h1(
+        hla_split_metrics_path=source_paths["hla_h1_split_metrics"],
+        hla_verification_path=source_paths["hla_h1_verification_report"],
+        hla_checksums_path=source_paths["hla_h1_checksums"],
         isg_path=source_paths["isg_discovery_by_split"],
     )
 
@@ -567,31 +691,24 @@ def write_hiha_parameter_sensitivity(
         for suffix in ("png", "pdf", "svg")
     }
     render_hiha_parameter_sensitivity(summary, outputs)
-    alt_path = figures_root / "manuscript_fig_hiha_supp_parameter_sensitivity_alt.txt"
-    alt_path.write_text(
-        "Four-panel HIHA query-penalty-bound sensitivity figure. Panels A and B "
-        "show within-cDC2 average precision, and Panels C and D show "
-        "represented-state forced macro-F1 for the HLA-DRhi cDC2 and ISG+ "
-        "cDC2 endpoints, respectively. Stars mark the reported operating "
-        "point in the ISG+ cDC2 panels; the reported HLA-DRhi cDC2 point is "
-        "outside its displayed grid.\n",
-        encoding="utf-8",
-    )
-
     artifacts = {
         "by_split": by_split_path,
         "summary": summary_path,
         "figure_png": outputs["png"],
         "figure_pdf": outputs["pdf"],
         "figure_svg": outputs["svg"],
-        "alt_text": alt_path,
     }
     manifest = {
         "analysis_id": "hiha_query_penalty_sensitivity_figure",
         "aggregation": "arithmetic mean across five fixed donor splits",
         "metrics": ["within-cDC2 AP", "represented-state forced macro-F1"],
         "parameter_grids": PARAMETERS,
-        "reported_operating_points": REPORTED_OPERATING_POINTS,
+        "selected_settings": SELECTED_SETTINGS,
+        "rendering_metadata_policy": {
+            "svg_hash_salt": SVG_HASH_SALT,
+            "svg_date_removed": True,
+            "pdf_creation_and_modification_dates_removed": True,
+        },
         "sources": {
             name: {"path": str(path.relative_to(project_root)), "sha256": _sha256_file(path)}
             for name, path in source_paths.items()
@@ -601,10 +718,13 @@ def write_hiha_parameter_sensitivity(
             for name, path in artifacts.items()
         },
         "interpretation": {
-            "descriptive_parameter_sensitivity": True,
-            "independent_robustness_validation": False,
-            "hla_reported_operating_point_in_displayed_grid": False,
-            "isg_grid_informed_reported_operating_point": True,
+            "same_data_parameter_sensitivity": True,
+            "independent_validation": False,
+            "hla_selection_performed": False,
+            "hla_selected_setting_unchanged": True,
+            "hla_selected_setting_in_displayed_grid": True,
+            "isg_grid_informed_selected_setting": True,
+            "cross_endpoint_sensitivity_magnitude_comparison_supported": False,
         },
     }
     manifest_path = (

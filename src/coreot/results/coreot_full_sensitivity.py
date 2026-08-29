@@ -593,7 +593,7 @@ def _display_name(method: str, tau_min: float | None, tau_max: float | None, alp
 
 def _sort_rows(frame: pd.DataFrame) -> pd.DataFrame:
     ordered = frame.copy()
-    ref_order = {"prior_only": 0, "nn": 1, "balanced_ot": 2}
+    ref_order = {"prior_only": 0, "nn": 1}
     ordered["_method_order"] = ordered["method"].map(ref_order).fillna(10)
     ordered["_tau_min"] = ordered.get("tau_min", pd.Series(dtype=float)).fillna(-1)
     ordered["_tau_max"] = ordered.get("tau_max", pd.Series(dtype=float)).fillna(-1)
@@ -943,7 +943,7 @@ def render_coreot_full_tau_range_report(
             "",
             "## Fixed Reference Rows",
             "",
-            "- **Fixed methods:** `prior_only`, `nn`, `balanced_ot`",
+            "- **Fixed methods:** `prior_only`, `nn`",
             f"- **Fixed reference source:** `{fixed_reference_root}`",
         ])
     lines.extend([

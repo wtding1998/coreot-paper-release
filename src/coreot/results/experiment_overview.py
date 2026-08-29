@@ -131,7 +131,7 @@ def write_experiment_overview_table(
         },
         {
             "characteristic": "Transport methods",
-            "value": "prior_only, nn, balanced_ot (dense), uniform_uot (sparse), "
+            "value": "prior_only, nn, uniform_uot (sparse), "
             "coreot_constant_tau (sparse), coreot_full (sparse)",
         },
         {

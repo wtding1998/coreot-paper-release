@@ -804,6 +804,7 @@ def _run_hiha_split(
     endpoint: EndpointDesign,
     seed: int,
     configurations: Sequence[SurfaceConfiguration],
+    retain_fit_artifacts: bool = False,
 ) -> Path:
     run_root = _base_run_root(analysis_root, endpoint, cohort, seed)
     inputs = _base_input_paths(run_root)
@@ -844,9 +845,43 @@ def _run_hiha_split(
         "source_priors_sha256": source_hash,
         "cohort_manifest_sha256": design_manifest_sha256,
     }
+
+    def pair_root(configuration: SurfaceConfiguration) -> Path:
+        storage = "fits" if retain_fit_artifacts else "tmp"
+        return (
+            analysis_root
+            / storage
+            / cohort
+            / analysis_stage
+            / endpoint.slug
+            / f"seed{seed}"
+            / _configuration_slug(configuration)
+        )
+
+    def complete_pair_artifacts(path: Path) -> bool:
+        return all(
+            (path / variant / filename).is_file()
+            for variant in VARIANTS
+            for filename in RETAINED_FIT_FILES
+        )
+
     frame = _read_checkpoint(
         checkpoint, identity=identity, configured=configured
     )
+    if retain_fit_artifacts:
+        keep = [
+            complete_pair_artifacts(
+                pair_root(
+                    SurfaceConfiguration(
+                        alpha=float(row.alpha),
+                        tau_min=float(row.tau_min),
+                        tau_max=float(row.tau_max),
+                    )
+                )
+            )
+            for row in frame.itertuples(index=False)
+        ]
+        frame = frame.loc[keep].copy()
     frame.to_csv(checkpoint, index=False)
     completed = {
         SurfaceConfiguration(
@@ -860,15 +895,9 @@ def _run_hiha_split(
         tau_mean = mean_matched_tau(
             source_priors, configuration.tau_min, configuration.tau_max
         )
-        temporary = (
-            analysis_root
-            / "tmp"
-            / cohort
-            / analysis_stage
-            / endpoint.slug
-            / f"seed{seed}"
-            / _configuration_slug(configuration)
-        )
+        temporary = pair_root(configuration)
+        if retain_fit_artifacts and temporary.exists():
+            shutil.rmtree(temporary)
         pair = _run_pair(
             experiment="hiha",
             endpoint=endpoint,
@@ -880,6 +909,17 @@ def _run_hiha_split(
             truth=truth,
             method_root=temporary,
         )
+        if retain_fit_artifacts and not complete_pair_artifacts(temporary):
+            missing = [
+                f"{variant}/{filename}"
+                for variant in VARIANTS
+                for filename in RETAINED_FIT_FILES
+                if not (temporary / variant / filename).is_file()
+            ]
+            raise ValueError(
+                f"Retained rho-attribution pair lacks artifacts {missing}: "
+                f"{temporary}"
+            )
         row = {
             **identity,
             "alpha": configuration.alpha,
@@ -896,7 +936,8 @@ def _run_hiha_split(
             else pd.concat([frame, new_row], ignore_index=True)
         ).sort_values(["alpha", "tau_min", "tau_max"])
         frame.to_csv(checkpoint, index=False)
-        shutil.rmtree(temporary)
+        if not retain_fit_artifacts:
+            shutil.rmtree(temporary)
         print(
             f"completed {cohort}/{analysis_stage}: {endpoint.endpoint}, "
             f"seed {seed}, {configuration}",
@@ -1242,6 +1283,7 @@ def _run_hiha_alpha0_grid(
     figure_filename: str,
     tau_pair_rule: str,
     selection_provenance: dict[str, object] | None = None,
+    retain_fit_artifacts: bool = False,
 ) -> tuple[Path, Path, Path, Path]:
     design = validate_design_manifest(design_manifest, project_root=project_root)
     selected_endpoints = _selected_endpoints(endpoints)
@@ -1301,6 +1343,7 @@ def _run_hiha_alpha0_grid(
                 endpoint=endpoint,
                 seed=seed,
                 configurations=configurations,
+                retain_fit_artifacts=retain_fit_artifacts,
             )
             for endpoint in selected_endpoints
             for seed in seeds
@@ -1443,6 +1486,7 @@ def run_hiha_alpha0_fine(
     analysis_root: Path,
     endpoints: Sequence[str] | None,
     jobs: int,
+    retain_fit_artifacts: bool = False,
 ) -> tuple[Path, Path, Path, Path]:
     return _run_hiha_alpha0_grid(
         project_root=project_root,
@@ -1458,6 +1502,7 @@ def run_hiha_alpha0_fine(
         result_filename="alpha0_fine_result.yaml",
         figure_filename="discovery_alpha0_fine_relative_ap.png",
         tau_pair_rule="tau_min <= tau_max and tau_max / tau_min <= 2",
+        retain_fit_artifacts=retain_fit_artifacts,
     )
 
 
@@ -1468,6 +1513,7 @@ def run_hiha_alpha0_focused(
     analysis_root: Path,
     endpoints: Sequence[str] | None,
     jobs: int,
+    retain_fit_artifacts: bool = False,
 ) -> tuple[Path, Path, Path, Path]:
     return _run_hiha_alpha0_grid(
         project_root=project_root,
@@ -1491,6 +1537,7 @@ def run_hiha_alpha0_focused(
             "purpose": "narrower manuscript-facing descriptive display",
             "confirmatory_interpretation": False,
         },
+        retain_fit_artifacts=retain_fit_artifacts,
     )
 
 
@@ -1606,6 +1653,16 @@ def _load_refinement_configurations(
         )
         for configuration in configurations
         if isinstance(configuration, dict)
+    )
+
+
+def mouse_alpha5_retained_configurations() -> tuple[SurfaceConfiguration, ...]:
+    tau_values = (0.25, 0.5, 1.0, 2.0, 4.0)
+    return tuple(
+        SurfaceConfiguration(alpha=5.0, tau_min=tau_min, tau_max=tau_max)
+        for tau_min in tau_values
+        for tau_max in tau_values
+        if tau_min <= tau_max
     )
 
 
@@ -2346,6 +2403,7 @@ def build_parser() -> argparse.ArgumentParser:
             "lock-hiha",
             "run-hiha-confirmation",
             "run-mouse-coarse",
+            "run-mouse-retained-alpha5",
             "run-mouse-refinement",
         ),
     )
@@ -2362,6 +2420,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--alpha", type=float, default=None)
     parser.add_argument("--tau-min", type=float, default=None)
     parser.add_argument("--tau-max", type=float, default=None)
+    parser.add_argument(
+        "--retain-fit-artifacts",
+        action="store_true",
+        help="Retain complete fit bundles under fits and resume only complete fits.",
+    )
     return parser
 
 
@@ -2437,6 +2500,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             analysis_root=hiha_root,
             endpoints=args.endpoint,
             jobs=args.jobs,
+            retain_fit_artifacts=args.retain_fit_artifacts,
         ):
             print(path)
     elif args.command == "run-hiha-alpha0-focused":
@@ -2446,6 +2510,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             analysis_root=hiha_root,
             endpoints=args.endpoint,
             jobs=args.jobs,
+            retain_fit_artifacts=args.retain_fit_artifacts,
         ):
             print(path)
     elif args.command == "lock-hiha":
@@ -2468,6 +2533,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             design_manifest=design_manifest,
             output_root=mouse_root,
             jobs=args.jobs,
+        ):
+            print(path)
+    elif args.command == "run-mouse-retained-alpha5":
+        for path in run_mouse_coarse(
+            project_root=project_root,
+            design_manifest=design_manifest,
+            output_root=mouse_root,
+            jobs=args.jobs,
+            configurations=mouse_alpha5_retained_configurations(),
+            retain_fit_artifacts=True,
         ):
             print(path)
     elif args.command == "run-mouse-refinement":

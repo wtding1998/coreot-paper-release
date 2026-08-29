@@ -14,6 +14,12 @@ class SparseUOTResult:
     target_marginal: np.ndarray
     n_iter: int
     converged: bool
+    terminal_scaling_change: float
+    fixed_point_residual: float
+    kernel_floor_active: bool
+    denominator_floor_active: bool
+    nonfinite_detected: bool
+    iteration_cap_reached: bool
 
 
 @dataclass(frozen=True)
@@ -177,13 +183,18 @@ def solve_sparse_unbalanced_sinkhorn(
     if np.any(tau_source <= 0) or np.any(tau_target <= 0):
         raise ValueError("tau_source and tau_target must be positive")
 
-    kernel = np.exp(-cost.astype(float) / float(epsilon))
+    raw_kernel = np.exp(-cost.astype(float) / float(epsilon))
+    kernel_floor_active = bool(np.any(raw_kernel < numerical_floor))
+    kernel = raw_kernel
     kernel = np.maximum(kernel, numerical_floor)
     source_scale = np.ones(len(source_mass), dtype=float)
     target_scale = np.ones(len(target_mass), dtype=float)
     source_power = tau_source / (tau_source + epsilon)
     target_power = tau_target / (tau_target + epsilon)
     converged = False
+    denominator_floor_active = False
+    nonfinite_detected = False
+    terminal_scaling_change = float("inf")
 
     for iteration in range(1, max_iter + 1):
         previous_source_scale = source_scale.copy()
@@ -193,6 +204,9 @@ def solve_sparse_unbalanced_sinkhorn(
             source_index,
             weights=kernel * target_scale[target_index],
             minlength=len(source_mass),
+        )
+        denominator_floor_active = denominator_floor_active or bool(
+            np.any(source_denominator < numerical_floor)
         )
         source_scale = np.power(
             source_mass / np.maximum(source_denominator, numerical_floor),
@@ -204,18 +218,58 @@ def solve_sparse_unbalanced_sinkhorn(
             weights=kernel * source_scale[source_index],
             minlength=len(target_mass),
         )
+        denominator_floor_active = denominator_floor_active or bool(
+            np.any(target_denominator < numerical_floor)
+        )
         target_scale = np.power(
             target_mass / np.maximum(target_denominator, numerical_floor),
             target_power,
         )
 
-        source_delta = np.max(np.abs(source_scale - previous_source_scale))
-        target_delta = np.max(np.abs(target_scale - previous_target_scale))
-        if max(source_delta, target_delta) <= tol:
+        if not (np.isfinite(source_scale).all() and np.isfinite(target_scale).all()):
+            nonfinite_detected = True
+            break
+        source_delta = float(np.max(np.abs(source_scale - previous_source_scale)))
+        target_delta = float(np.max(np.abs(target_scale - previous_target_scale)))
+        terminal_scaling_change = max(source_delta, target_delta)
+        if terminal_scaling_change <= tol:
             converged = True
             break
     else:
         iteration = max_iter
+
+    check_source_denominator = np.bincount(
+        source_index,
+        weights=kernel * target_scale[target_index],
+        minlength=len(source_mass),
+    )
+    check_source_scale = np.power(
+        source_mass / np.maximum(check_source_denominator, numerical_floor),
+        source_power,
+    )
+    check_target_denominator = np.bincount(
+        target_index,
+        weights=kernel * check_source_scale[source_index],
+        minlength=len(target_mass),
+    )
+    check_target_scale = np.power(
+        target_mass / np.maximum(check_target_denominator, numerical_floor),
+        target_power,
+    )
+    if np.isfinite(check_source_scale).all() and np.isfinite(check_target_scale).all():
+        source_residual = np.abs(check_source_scale - source_scale) / np.maximum(
+            1.0, np.abs(source_scale)
+        )
+        target_residual = np.abs(check_target_scale - target_scale) / np.maximum(
+            1.0, np.abs(target_scale)
+        )
+        fixed_point_residual = max(
+            float(np.max(source_residual)),
+            float(np.max(target_residual)),
+        )
+    else:
+        fixed_point_residual = float("inf")
+        nonfinite_detected = True
 
     coupling = source_scale[source_index] * kernel * target_scale[target_index]
     source_marginal = np.bincount(source_index, weights=coupling, minlength=len(source_mass))
@@ -228,4 +282,10 @@ def solve_sparse_unbalanced_sinkhorn(
         target_marginal=target_marginal,
         n_iter=iteration,
         converged=converged,
+        terminal_scaling_change=terminal_scaling_change,
+        fixed_point_residual=fixed_point_residual,
+        kernel_floor_active=kernel_floor_active,
+        denominator_floor_active=denominator_floor_active,
+        nonfinite_detected=nonfinite_detected,
+        iteration_cap_reached=bool(iteration == max_iter and not converged),
     )

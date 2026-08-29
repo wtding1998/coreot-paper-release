@@ -7,7 +7,7 @@ import importlib
 from pathlib import Path
 import shutil
 import time
-from typing import Any
+from typing import Any, Sequence
 
 import anndata as ad
 import joblib
@@ -939,7 +939,6 @@ def _aggregate_baselines(config: dict[str, Any]) -> StageResult:
             ]
             absent = scoped["true_label"].astype(str).eq(holdout)
             score_column = {
-                "balanced_ot": "label_uncertainty",
                 "prior_only": "prior_risk",
             }.get(method, "u")
             detection_rows.append(
@@ -1050,7 +1049,6 @@ def _aggregate_baselines(config: dict[str, Any]) -> StageResult:
                 "internal_candidate_set": internal_candidate,
                 "external_candidate_set": "external_reference_mapping",
                 "primary_detection_scope": "within_broad",
-                "balanced_ot_detection_score": "label_uncertainty",
                 "prior_only_detection_score": "prior_risk",
                 "summary_variability": "descriptive_across_holdouts_not_biological_replicates",
             },
@@ -1088,6 +1086,28 @@ def _summarize_baseline_table(
     return pd.DataFrame(rows)
 
 
+def fixed_true_label_macro_f1(
+    true_labels: pd.Series | np.ndarray,
+    predicted_labels: pd.Series | np.ndarray,
+    *,
+    labels: Sequence[str] | None = None,
+) -> float:
+    true = pd.Series(true_labels, copy=False).astype(str)
+    predicted = pd.Series(predicted_labels, copy=False).astype(str)
+    fixed_labels = sorted(true.unique()) if labels is None else list(labels)
+    if true.empty or not fixed_labels:
+        return float("nan")
+    return float(
+        f1_score(
+            true,
+            predicted,
+            labels=fixed_labels,
+            average="macro",
+            zero_division=0.0,
+        )
+    )
+
+
 def _label_transfer_metrics(
     frame: pd.DataFrame, *, applicable: bool = True
 ) -> dict[str, float]:
@@ -1103,19 +1123,18 @@ def _label_transfer_metrics(
     true = frame["true_label"].astype(str)
     forced = frame["forced_label"].fillna("").astype(str)
     accepted = ~frame["abstain_u_or_entropy"].astype(bool)
+    labels = sorted(true.unique())
     return {
         "forced_accuracy": float(accuracy_score(true, forced)),
-        "forced_macro_f1": float(f1_score(true, forced, average="macro", zero_division=0)),
+        "forced_macro_f1": fixed_true_label_macro_f1(true, forced, labels=labels),
         "post_abstention_accuracy": (
             float(accuracy_score(true[accepted], forced[accepted]))
             if accepted.any()
             else float("nan")
         ),
         "post_abstention_macro_f1": (
-            float(
-                f1_score(
-                    true[accepted], forced[accepted], average="macro", zero_division=0
-                )
+            fixed_true_label_macro_f1(
+                true[accepted], forced[accepted], labels=labels
             )
             if accepted.any()
             else float("nan")
@@ -1200,7 +1219,6 @@ def _aggregate_metrics(config: dict[str, Any]) -> StageResult:
         methods = sorted(
             set(full.loc[full["u"].notna(), "method"].astype(str))
             & set(incomplete.loc[incomplete["u"].notna(), "method"].astype(str))
-            - {"balanced_ot"}
         )
         for method in methods:
             left = incomplete.loc[
@@ -1623,7 +1641,6 @@ def _aggregate_natural_baselines(config: dict[str, Any]) -> StageResult:
             scoped = joined.loc[_natural_primary_scope(endpoint, joined)]
             positive = scoped["true_label"].astype(str).eq(endpoint)
             score_column = {
-                "balanced_ot": "label_uncertainty",
                 "prior_only": "prior_risk",
             }.get(method, "u")
             detection_rows.append(
@@ -1707,7 +1724,6 @@ def _aggregate_natural_baselines(config: dict[str, Any]) -> StageResult:
             "coreot_match_only",
             "prior_only",
             "uniform_uot",
-            "balanced_ot",
             "nn",
             *map(str, baseline_config.get("external", ())),
         ],
@@ -2135,13 +2151,8 @@ def _run_natural_constant_tau_sensitivity(
                     "shared_forced_accuracy": float(
                         accuracy_score(shared_true, shared_forced)
                     ),
-                    "shared_forced_macro_f1": float(
-                        f1_score(
-                            shared_true,
-                            shared_forced,
-                            average="macro",
-                            zero_division=0,
-                        )
+                    "shared_forced_macro_f1": fixed_true_label_macro_f1(
+                        shared_true, shared_forced
                     ),
                 }
                 new_row = pd.DataFrame([row], columns=columns)
@@ -2881,13 +2892,8 @@ def _run_natural_match_only_sensitivity_variant(
                 "shared_forced_accuracy": float(
                     accuracy_score(shared_true, shared_forced)
                 ),
-                "shared_forced_macro_f1": float(
-                    f1_score(
-                        shared_true,
-                        shared_forced,
-                        average="macro",
-                        zero_division=0,
-                    )
+                "shared_forced_macro_f1": fixed_true_label_macro_f1(
+                    shared_true, shared_forced
                 ),
                 "rho_recipe": str(source_priors["rho_recipe"].iloc[0]),
                 "source_priors_sha256": source_priors_hash,

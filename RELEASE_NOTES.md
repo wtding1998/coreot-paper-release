@@ -1,0 +1,18 @@
+# Release candidate 2026-08-29
+
+This source-only candidate is bound to the following technical authorities:
+
+- source checkpoint: `wtding1998/CoReOT@15431b1b506103abb5d4375b03d739205bf930fb`;
+- source tag: `release-candidate-2026-08-29`;
+- evidence candidate: `2026-08-28-current-executable-r4`;
+- evidence registry: `paper-release/provenance/release.yaml`;
+- complete evidence checksum inventory:
+  `paper-release/provenance/checksums.sha256`.
+
+The source candidate includes the 2026-08-29 PBMC CellTypist full-refit
+reproduction entry point and its fail-closed contract tests. Biological HDF5
+objects remain external dependencies and are not included in this repository.
+
+This candidate is not a public-release authorization record. Repository
+visibility, release-asset publication, archival DOI creation, and journal
+submission remain corresponding-author actions.

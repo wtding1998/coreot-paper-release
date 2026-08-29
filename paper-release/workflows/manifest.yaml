@@ -1,0 +1,21 @@
+schema_version: 1
+units:
+  - hiha_primary
+  - hiha_matched_reference
+  - hiha_compatibility_sensitivity
+  - hiha_matchability_attribution
+  - hiha_parameter_and_calibration
+  - pbmc_primary
+  - pbmc_matched_reference
+  - pbmc_compatibility_sensitivity
+  - pbmc_matchability_attribution
+  - pbmc_parameter_and_calibration
+  - pbmc_prior_dependence
+  - mouse_spleen_primary
+  - mouse_spleen_compatibility_sensitivity
+  - mouse_spleen_matchability_attribution
+  - mouse_spleen_parameter_sensitivity
+  - convergence_and_environment
+code_dependencies:
+  - source_path: src/coreot/results/main_metric_bars.py
+    release_path: code/src/coreot/results/main_metric_bars.py

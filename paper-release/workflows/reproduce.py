@@ -6,7 +6,7 @@ from pathlib import Path
 import traceback
 from typing import Sequence
 
-from coreot.submission import validate_submission_release
+from .release_validation import validate_submission_release
 
 from .convergence import regenerate_convergence_unit
 from .hiha import generate_hiha_release_artifacts
@@ -28,7 +28,6 @@ ORDERED_RELEASE_UNITS = (
     "hiha_compatibility_sensitivity",
     "hiha_matchability_attribution",
     "hiha_parameter_and_calibration",
-    "hiha_prior_dependence",
     "pbmc_primary",
     "pbmc_matched_reference",
     "pbmc_compatibility_sensitivity",
@@ -39,7 +38,6 @@ ORDERED_RELEASE_UNITS = (
     "mouse_spleen_compatibility_sensitivity",
     "mouse_spleen_matchability_attribution",
     "mouse_spleen_parameter_sensitivity",
-    "mouse_spleen_prior_dependence",
     "convergence_and_environment",
 )
 

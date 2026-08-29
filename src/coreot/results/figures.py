@@ -580,7 +580,6 @@ def _method_order() -> tuple[str, ...]:
     return (
         "prior_only",
         "nn",
-        "balanced_ot",
         "uniform_uot",
         "coreot_constant_tau",
         "coreot_full",
@@ -591,7 +590,6 @@ def _display_method(method: str) -> str:
     return {
         "prior_only": "Prior-only",
         "nn": "Nearest neighbor",
-        "balanced_ot": "Balanced OT",
         "uniform_uot": "Uniform UOT",
         "coreot_constant_tau": "CoRe-OT constant rho",
         "coreot_full": "Full CoRe-OT",
@@ -602,7 +600,6 @@ def _short_method(method: str) -> str:
     return {
         "prior_only": "Prior",
         "nn": "NN",
-        "balanced_ot": "Balanced",
         "uniform_uot": "Uniform UOT",
         "coreot_constant_tau": "Const rho",
         "coreot_full": "Full",
@@ -613,7 +610,6 @@ def _tradeoff_label_offset(method: str) -> tuple[int, int]:
     return {
         "prior_only": (4, 12),
         "nn": (18, 2),
-        "balanced_ot": (4, 5),
         "uniform_uot": (4, 6),
         "coreot_constant_tau": (4, 0),
         "coreot_full": (4, -10),
@@ -624,7 +620,6 @@ def _method_face(method: str) -> str:
     return {
         "prior_only": FIGURE_PALETTE["note_face"],
         "nn": FIGURE_PALETTE["gray_face"],
-        "balanced_ot": FIGURE_PALETTE["purple_face"],
         "uniform_uot": FIGURE_PALETTE["orange_face"],
         "coreot_constant_tau": FIGURE_PALETTE["green_face"],
         "coreot_full": FIGURE_PALETTE["blue_face"],
@@ -635,7 +630,6 @@ def _method_edge(method: str) -> str:
     return {
         "prior_only": FIGURE_PALETTE["note_edge"],
         "nn": FIGURE_PALETTE["gray_edge"],
-        "balanced_ot": FIGURE_PALETTE["purple_edge"],
         "uniform_uot": FIGURE_PALETTE["orange_edge"],
         "coreot_constant_tau": FIGURE_PALETTE["green_edge"],
         "coreot_full": FIGURE_PALETTE["blue_edge"],
@@ -1038,7 +1032,7 @@ def _labelwise_transfer_plot(
     color_map = {
         "CD14+ cDC2": _method_edge("uniform_uot"),
         "HLA-DRhi cDC2": _method_edge("coreot_constant_tau"),
-        "ISG+ cDC2": _method_edge("balanced_ot"),
+        "ISG+ cDC2": FIGURE_PALETTE["purple_edge"],
     }
     for lbl in frame["held_out_label"].unique():
         lbl_frame = frame.loc[frame["held_out_label"] == lbl]

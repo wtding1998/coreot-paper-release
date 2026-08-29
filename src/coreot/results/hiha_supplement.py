@@ -15,14 +15,13 @@ import yaml
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 
 
 EXPECTED_HELD_OUT = ("HLA-DRhi cDC2", "ISG+ cDC2")
 CONDITIONS = ("incomplete_reference", "full_reference_control")
 CONDITION_LABELS = {
-    "incomplete_reference": "Incomplete reference",
-    "full_reference_control": "Full reference",
+    "incomplete_reference": "Reference-omitted condition",
+    "full_reference_control": "Restored-reference condition",
 }
 CONDITION_COLORS = {
     "incomplete_reference": "#E69F00",
@@ -30,7 +29,7 @@ CONDITION_COLORS = {
 }
 GROUPS = ("held_out", "other_cdc2", "other")
 GROUP_LABELS = {
-    "held_out": "Held-out-state cells",
+    "held_out": "Reference-omitted cells",
     "other_cdc2": "Represented cDC2\ncontrols",
     "other": "Other shared states",
 }
@@ -38,13 +37,6 @@ CDC2_STATE_ORDER = ("CD14+ cDC2", "HLA-DRhi cDC2", "ISG+ cDC2")
 NON_CDC2 = "Non-cDC2"
 DEFAULT_CANDIDATE_SET = "hiha_harmony30_k100"
 DEFAULT_ETA = 1.0e-12
-S3_N_PRIOR_INTERVALS = 20
-S3_CDC2_LABEL = "cDC2"
-S3_MEAN_COLOR = "#D55E00"
-S3_SPLIT_COLOR = "#B1AAA4"
-S3_TEXT_COLOR = "#2D2926"
-S3_ZERO_COLOR = "#6F655E"
-S3_GRID_COLOR = "#ECE6E1"
 
 
 class HIHASupplementError(RuntimeError):
@@ -224,7 +216,9 @@ def _target_state_order(full_labels: pd.DataFrame) -> list[str]:
     ordered = [label for label in CDC2_STATE_ORDER if label in cdc2_states]
     ordered.extend(sorted(cdc2_states - set(ordered)))
     if not ordered:
-        raise HIHASupplementError("The full reference has no represented cDC2 target states.")
+        raise HIHASupplementError(
+            "The restored-reference condition has no represented cDC2 target states."
+        )
     return ordered + [NON_CDC2]
 
 
@@ -522,12 +516,11 @@ def _plot_s1(
     figure = plt.figure(figsize=(11.8, 6.4))
     outer = figure.add_gridspec(
         2,
-        3,
-        width_ratios=(5.6, 1.15, 0.16),
+        2,
+        width_ratios=(5.6, 1.15),
         wspace=0.12,
         hspace=0.55,
     )
-    shared_image = None
 
     for row, held_out in enumerate(EXPECTED_HELD_OUT):
         heat_axis = figure.add_subplot(outer[row, 0])
@@ -595,7 +588,7 @@ def _plot_s1(
                 )
                 row_keys.append((group, condition))
         heat = np.asarray(heat_rows, dtype=float)
-        image = heat_axis.imshow(
+        heat_axis.imshow(
             heat,
             vmin=0,
             vmax=1,
@@ -603,7 +596,6 @@ def _plot_s1(
             aspect="auto",
             interpolation="nearest",
         )
-        shared_image = image
         for i in range(heat.shape[0]):
             for j in range(heat.shape[1]):
                 value = heat[i, j]
@@ -667,17 +659,38 @@ def _plot_s1(
         mass_axis.spines[["top", "right", "left"]].set_visible(False)
         mass_axis.invert_yaxis()
 
-    if shared_image is None:
-        raise HIHASupplementError("Supplementary Figure S1 has no heatmap data.")
-    colorbar_axis = figure.add_subplot(outer[:, 2])
-    colorbar = figure.colorbar(shared_image, cax=colorbar_axis)
-    colorbar.set_ticks([0.0, 0.25, 0.5, 0.75, 1.0])
-    colorbar.set_label("Mean conditional destination fraction", fontsize=7)
-    colorbar.ax.tick_params(labelsize=6.5)
-
     figure.savefig(output_path, dpi=350, bbox_inches="tight")
     figure.savefig(output_path.with_suffix(".pdf"), bbox_inches="tight")
     plt.close(figure)
+
+
+def _write_s1_description(
+    *,
+    description_path: Path,
+    source_path: Path,
+    auprc_path: Path,
+    destination_path: Path,
+    eta: float,
+) -> None:
+    description_path.write_text(
+        "# Supplementary Figure S1\n\n"
+        "Reference destinations and relative transported query mass under "
+        "endpoint-state omission and restoration. Panels A and B correspond to "
+        "HLA-DRhi cDC2 and ISG+ cDC2, respectively, and use CoRe-OT. Heatmap "
+        "entries are query-cell-normalized destination fractions averaged across "
+        "five donor splits. An em dash marks the endpoint's structural "
+        "unavailability under the reference-omitted condition. Orange and blue "
+        "bars denote the reference-omitted and restored-reference conditions, "
+        "respectively, and show mean relative transported query mass with "
+        "sample-standard-deviation error bars. Query groups use raw AIFI_L2 "
+        "metadata and evaluation-side true_label only for the "
+        "reference-omitted-cell grouping.\n\n"
+        f"Source summary: {source_path}\n\n"
+        f"AUPRC summary: {auprc_path}\n\n"
+        f"Destination summary: {destination_path}\n\n"
+        f"Transported-mass inclusion floor: eta = {eta:g}.\n",
+        encoding="utf-8",
+    )
 
 
 def write_hiha_s1(
@@ -713,23 +726,12 @@ def write_hiha_s1(
     _plot_s1(destination_summary, figure_path)
 
     description_path = output_root / "supplementary_figure_s1_destinations.md"
-    description_path.write_text(
-        "# Supplementary Figure S1\n\n"
-        "Conditional transport destinations under the incomplete and paired "
-        "full references. Panels A and B correspond to HLA-DRhi cDC2 and ISG+ "
-        "cDC2, respectively, and use only Full CoRe-OT. Heatmap entries are "
-        "query-cell-normalized destination fractions averaged across five fixed "
-        "donor splits. An em dash marks the endpoint's structural unavailability "
-        "under the incomplete reference. Orange and blue bars denote the "
-        "incomplete and full references, respectively, and show mean relative "
-        "transported query mass with sample-standard-deviation error bars. "
-        "Query groups use raw AIFI_L2 metadata and "
-        "evaluation-side true_label only for the held-out-state grouping.\n\n"
-        f"Source summary: {source_path}\n\n"
-        f"AUPRC summary: {auprc_path}\n\n"
-        f"Destination summary: {destination_path}\n\n"
-        f"Transported-mass inclusion floor: eta = {eta:g}.\n",
-        encoding="utf-8",
+    _write_s1_description(
+        description_path=description_path,
+        source_path=source_path,
+        auprc_path=auprc_path,
+        destination_path=destination_path,
+        eta=eta,
     )
     manifest_path = output_root / "supplementary_figure_s1_manifest.yaml"
     manifest_path.write_text(
@@ -821,548 +823,6 @@ def _method_rows(scores: pd.DataFrame, method: str) -> pd.DataFrame:
     if rows.empty:
         raise HIHASupplementError(f"Missing {method} rows in HIHA scoring artifacts.")
     return rows
-
-
-def _within_cdc2_rows(
-    coreot: pd.DataFrame, held_out: str, seed: int
-) -> pd.DataFrame:
-    _require_columns(coreot, ("cell_id", "AIFI_L2"), Path("cell_scores.parquet"))
-    rows = coreot.loc[
-        coreot["AIFI_L2"].astype(str).eq(S3_CDC2_LABEL)
-    ].copy()
-    if rows.empty:
-        raise HIHASupplementError(
-            f"Missing {S3_CDC2_LABEL} query cells for {held_out}, seed={seed}."
-        )
-    if rows["cell_id"].duplicated().any():
-        raise HIHASupplementError(
-            f"Duplicate within-cDC2 query cells for {held_out}, seed={seed}."
-        )
-    return rows
-
-
-def _equal_frequency_bins(
-    coreot: pd.DataFrame, held_out: str, seed: int
-) -> list[dict[str, object]]:
-    required = ("cell_id", "u", "prior_risk")
-    _require_columns(coreot, required, Path("cell_scores.parquet"))
-    frame = coreot.copy()
-    frame["u"] = pd.to_numeric(frame["u"], errors="coerce")
-    frame["prior_risk"] = pd.to_numeric(frame["prior_risk"], errors="coerce")
-    n_cohort = len(frame)
-    finite = np.isfinite(frame["u"]) & np.isfinite(frame["prior_risk"])
-    frame = frame.loc[finite].copy()
-    if len(frame) < 2:
-        raise HIHASupplementError(
-            f"Fewer than two finite prior-risk diagnostic cells for "
-            f"{held_out}, seed={seed}."
-        )
-    average_rank = frame["prior_risk"].rank(method="average")
-    frame["prior_bin"] = np.minimum(
-        (
-            np.floor(
-                (average_rank.to_numpy(dtype=float) - 1.0)
-                * S3_N_PRIOR_INTERVALS
-                / len(frame)
-            ).astype(int)
-            + 1
-        ),
-        S3_N_PRIOR_INTERVALS,
-    )
-    rows: list[dict[str, object]] = []
-    for prior_bin, subset in frame.groupby("prior_bin", sort=True):
-        rows.append(
-            {
-                "held_out_label": held_out,
-                "seed": seed,
-                "prior_bin": int(prior_bin),
-                "n_cells": int(len(subset)),
-                "n_cohort": int(n_cohort),
-                "n_finite": int(len(frame)),
-                "n_nonfinite_excluded": int(n_cohort - len(frame)),
-                "mean_prior_risk": float(subset["prior_risk"].mean()),
-                "mean_u": float(subset["u"].mean()),
-            }
-        )
-    occupied = len(rows)
-    for row in rows:
-        row["n_occupied_bins"] = occupied
-    return rows
-
-
-def _pearson(x: pd.Series, y: pd.Series) -> float:
-    values = pd.DataFrame({"x": x, "y": y}).dropna().to_numpy(dtype=float)
-    if len(values) < 2:
-        return float("nan")
-    if np.isclose(values[:, 0].std(), 0.0) or np.isclose(values[:, 1].std(), 0.0):
-        return float("nan")
-    return float(np.corrcoef(values[:, 0], values[:, 1])[0, 1])
-
-
-def _spearman(x: pd.Series, y: pd.Series) -> float:
-    values = pd.DataFrame({"x": x, "y": y}).dropna()
-    if len(values) < 2:
-        return float("nan")
-    return _pearson(
-        values["x"].rank(method="average"),
-        values["y"].rank(method="average"),
-    )
-
-
-def _prior_correlation_row(
-    coreot: pd.DataFrame, held_out: str, seed: int
-) -> dict[str, object]:
-    required = ("u", "prior_risk")
-    _require_columns(coreot, required, Path("cell_scores.parquet"))
-    frame = coreot.copy()
-    for column in required:
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    valid = np.isfinite(frame["u"]) & np.isfinite(frame["prior_risk"])
-    subset = frame.loc[valid]
-    if len(subset) < 2:
-        raise HIHASupplementError(
-            f"Fewer than two finite prior-risk pairs for {held_out}, seed={seed}."
-        )
-    return {
-        "held_out_label": held_out,
-        "seed": seed,
-        "metric": "u_vs_prior_risk",
-        "metric_label": "u vs prior risk",
-        "spearman": _spearman(subset["u"], subset["prior_risk"]),
-        "pearson": _pearson(subset["u"], subset["prior_risk"]),
-        "n_cells": int(len(subset)),
-        "n_cohort": int(len(frame)),
-        "n_excluded": int(len(frame) - len(subset)),
-        "excluded_fraction": float(1.0 - len(subset) / len(frame)),
-    }
-
-
-def _complete_bin_means(bins: pd.DataFrame) -> pd.DataFrame:
-    required = (
-        "held_out_label",
-        "seed",
-        "prior_bin",
-        "mean_prior_risk",
-        "mean_u",
-    )
-    _require_columns(bins, required, Path("prior_bins_by_seed.csv"))
-    summary = (
-        bins.groupby(["held_out_label", "prior_bin"], as_index=False)
-        .agg(
-            n_splits=("seed", "nunique"),
-            mean_prior_risk=("mean_prior_risk", "mean"),
-            mean_u=("mean_u", "mean"),
-        )
-        .sort_values(["held_out_label", "prior_bin"])
-        .reset_index(drop=True)
-    )
-    return summary.loc[summary["n_splits"].eq(5)].copy()
-
-
-def _correlation_summary(correlations: pd.DataFrame) -> pd.DataFrame:
-    required = (
-        "held_out_label",
-        "seed",
-        "metric",
-        "spearman",
-        "pearson",
-        "n_cells",
-        "excluded_fraction",
-    )
-    _require_columns(correlations, required, Path("correlations_by_seed.csv"))
-    summary = (
-        correlations.groupby(["held_out_label", "metric"], as_index=False)
-        .agg(
-            n_splits=("seed", "nunique"),
-            spearman_mean=("spearman", "mean"),
-            spearman_sd=("spearman", "std"),
-            pearson_mean=("pearson", "mean"),
-            pearson_sd=("pearson", "std"),
-            n_cells_min=("n_cells", "min"),
-            n_cells_max=("n_cells", "max"),
-            excluded_fraction_mean=("excluded_fraction", "mean"),
-        )
-        .sort_values(["held_out_label", "metric"])
-        .reset_index(drop=True)
-    )
-    if not summary["n_splits"].eq(5).all():
-        raise HIHASupplementError(
-            "Each HIHA prior-risk correlation summary requires five donor splits."
-        )
-    return summary
-
-
-def _plot_s3(
-    bins: pd.DataFrame,
-    correlations: pd.DataFrame,
-    output_path: Path,
-) -> None:
-    donor_equal = _complete_bin_means(bins)
-    x_upper = _rounded_axis_upper(float(bins["mean_prior_risk"].max()), 0.05)
-    y_upper = _rounded_axis_upper(float(bins["mean_u"].max()), 0.08)
-    plt.rcParams.update(
-        {
-            "font.family": "Arial",
-            "font.size": 7,
-            "axes.labelsize": 7,
-            "axes.labelcolor": S3_TEXT_COLOR,
-            "xtick.labelsize": 6.5,
-            "ytick.labelsize": 6.5,
-            "xtick.color": S3_TEXT_COLOR,
-            "ytick.color": S3_TEXT_COLOR,
-            "text.color": S3_TEXT_COLOR,
-            "axes.edgecolor": S3_TEXT_COLOR,
-            "axes.linewidth": 0.6,
-        }
-    )
-    figure = plt.figure(figsize=(183 / 25.4, 65 / 25.4), facecolor="white")
-    outer = figure.add_gridspec(
-        1,
-        3,
-        width_ratios=(1.15, 1.15, 0.9),
-        left=0.09,
-        right=0.985,
-        bottom=0.30,
-        top=0.91,
-        wspace=0.42,
-    )
-    jitter = dict(zip(range(1, 6), (-0.06, -0.03, 0.0, 0.03, 0.06)))
-    curve_axes: list[plt.Axes] = []
-
-    for column, held_out in enumerate(EXPECTED_HELD_OUT):
-        row_bins = bins.loc[bins["held_out_label"].eq(held_out)]
-        if column == 0:
-            raw_axis = figure.add_subplot(outer[0, column])
-        else:
-            raw_axis = figure.add_subplot(
-                outer[0, column],
-                sharex=curve_axes[0],
-                sharey=curve_axes[0],
-            )
-        curve_axes.append(raw_axis)
-
-        for seed in sorted(row_bins["seed"].unique()):
-            seed_bins = (
-                row_bins.loc[row_bins["seed"].eq(seed)]
-                .set_index("prior_bin")
-                .reindex(range(1, S3_N_PRIOR_INTERVALS + 1))
-            )
-            raw_axis.plot(
-                seed_bins["mean_prior_risk"],
-                seed_bins["mean_u"],
-                color=S3_SPLIT_COLOR,
-                linewidth=0.6,
-                solid_capstyle="round",
-            )
-        mean_bins = (
-            donor_equal.loc[donor_equal["held_out_label"].eq(held_out)]
-            .set_index("prior_bin")
-            .reindex(range(1, S3_N_PRIOR_INTERVALS + 1))
-        )
-        raw_axis.plot(
-            mean_bins["mean_prior_risk"],
-            mean_bins["mean_u"],
-            color=S3_MEAN_COLOR,
-            linewidth=1.6,
-            marker="o",
-            markersize=2.2,
-            markerfacecolor=S3_MEAN_COLOR,
-            markeredgewidth=0,
-            solid_capstyle="round",
-        )
-        raw_axis.set_xlim(0, x_upper)
-        raw_axis.set_ylim(0, y_upper)
-        raw_axis.grid(color=S3_GRID_COLOR, linewidth=0.35)
-        raw_axis.spines[["top", "right"]].set_visible(False)
-        raw_axis.tick_params(width=0.6, length=2.5, labelleft=True)
-        raw_axis.set_ylabel(r"Query-marginal deficit $u_{q,i}$")
-        raw_axis.text(
-            -0.12,
-            1.04,
-            chr(65 + column),
-            transform=raw_axis.transAxes,
-            fontsize=8,
-            weight="bold",
-            va="bottom",
-        )
-        raw_axis.set_title(
-            held_out,
-            fontsize=7,
-            weight="bold",
-            pad=5,
-        )
-        if column == 0:
-            figure.legend(
-                handles=[
-                    Line2D(
-                        [0],
-                        [0],
-                        color=S3_SPLIT_COLOR,
-                        linewidth=0.6,
-                        label="Donor split",
-                    ),
-                    Line2D(
-                        [0],
-                        [0],
-                        color=S3_MEAN_COLOR,
-                        linewidth=1.6,
-                        marker="o",
-                        markersize=2.2,
-                        label="Donor-equal mean",
-                    ),
-                ],
-                frameon=False,
-                fontsize=6,
-                loc="lower center",
-                bbox_to_anchor=(0.375, 0.025),
-                ncol=2,
-                handlelength=1.8,
-                columnspacing=0.9,
-                borderaxespad=0,
-            )
-
-    correlation_axis = figure.add_subplot(outer[0, 2])
-    y_positions = (1.0, 0.0)
-    for y_position, held_out in zip(
-        y_positions,
-        EXPECTED_HELD_OUT,
-        strict=True,
-    ):
-        values = (
-            correlations.loc[correlations["held_out_label"].eq(held_out)]
-            .sort_values("seed")
-            .copy()
-        )
-        correlation_axis.scatter(
-            values["spearman"],
-            [y_position + jitter[int(seed)] for seed in values["seed"]],
-            color=S3_SPLIT_COLOR,
-            s=9,
-            edgecolor="none",
-            zorder=2,
-        )
-        correlation_axis.scatter(
-            values["spearman"].mean(),
-            y_position,
-            marker="D",
-            color=S3_MEAN_COLOR,
-            s=25,
-            edgecolor=S3_TEXT_COLOR,
-            linewidth=0.45,
-            zorder=3,
-        )
-    correlation_axis.axvline(0, color=S3_ZERO_COLOR, linewidth=0.8)
-    correlation_axis.set_xlim(-1, 1)
-    correlation_axis.set_ylim(-0.4, 1.4)
-    correlation_axis.set_yticks(
-        y_positions,
-        ["HLA-DRhi\ncDC2", "ISG+\ncDC2"],
-    )
-    correlation_axis.grid(axis="x", color=S3_GRID_COLOR, linewidth=0.35)
-    correlation_axis.spines[["top", "right"]].set_visible(False)
-    correlation_axis.tick_params(width=0.6, length=2.5)
-    correlation_axis.set_title(
-        "Within-split association",
-        fontsize=7,
-        weight="bold",
-        pad=5,
-    )
-    correlation_axis.set_xlabel("Spearman correlation")
-    correlation_axis.text(
-        -0.18,
-        1.04,
-        "C",
-        transform=correlation_axis.transAxes,
-        fontsize=8,
-        weight="bold",
-        va="bottom",
-    )
-    figure.legend(
-        handles=[
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                linestyle="none",
-                markerfacecolor=S3_SPLIT_COLOR,
-                markeredgewidth=0,
-                markersize=3,
-                label="Donor split",
-            ),
-            Line2D(
-                [0],
-                [0],
-                marker="D",
-                linestyle="none",
-                markerfacecolor=S3_MEAN_COLOR,
-                markeredgecolor=S3_TEXT_COLOR,
-                markeredgewidth=0.45,
-                markersize=5,
-                label="Donor-equal mean",
-            ),
-        ],
-        frameon=False,
-        fontsize=6,
-        loc="lower center",
-        bbox_to_anchor=(0.885, 0.025),
-        ncol=2,
-        handlelength=1.2,
-        columnspacing=0.9,
-        borderaxespad=0,
-    )
-
-    figure.text(
-        0.375,
-        0.15,
-        r"Prior risk $r_{q,i}=1-\rho_{q,i}$",
-        va="center",
-        ha="center",
-        fontsize=7,
-    )
-    figure.savefig(output_path, dpi=450)
-    figure.savefig(output_path.with_suffix(".pdf"))
-    figure.savefig(output_path.with_suffix(".svg"))
-    plt.close(figure)
-
-
-def _rounded_axis_upper(value: float, padding: float) -> float:
-    if not np.isfinite(value) or value < 0:
-        raise HIHASupplementError(f"Invalid diagnostic axis maximum: {value}.")
-    padded = value * (1.0 + padding)
-    step = 0.05 if padded <= 0.5 else 0.1
-    return min(1.0, max(step, float(np.ceil(padded / step) * step)))
-
-
-def write_hiha_s3(
-    *,
-    runs_root: Path = Path("runs"),
-    input_path: Path = Path(
-        "data/derived/hiha_dc/"
-        "human_immune_health_atlas_dc.with_recomputed_AIFI_L2_score.h5ad"
-    ),
-    output_root: Path = Path("results/HIHA_DC/figures"),
-    candidate_set: str = DEFAULT_CANDIDATE_SET,
-) -> dict[str, Path]:
-    runs = _discover_runs(runs_root)
-    input_metadata = _read_input_metadata(input_path)
-    bin_rows: list[dict[str, object]] = []
-    correlation_rows: list[dict[str, object]] = []
-    for run in runs:
-        scores = _read_s3_frame(run, input_metadata, candidate_set)
-        coreot = _within_cdc2_rows(
-            _method_rows(scores, "coreot_full"),
-            run.held_out_label,
-            run.seed,
-        )
-        bin_rows.extend(_equal_frequency_bins(coreot, run.held_out_label, run.seed))
-        correlation_rows.append(
-            _prior_correlation_row(coreot, run.held_out_label, run.seed)
-        )
-
-    bins = pd.DataFrame(bin_rows)
-    correlations = pd.DataFrame(correlation_rows)
-    donor_equal_bins = _complete_bin_means(bins)
-    correlation_summary = _correlation_summary(correlations)
-    output_root.mkdir(parents=True, exist_ok=True)
-    data_root = output_root / "data"
-    data_root.mkdir(parents=True, exist_ok=True)
-    bins_path = data_root / "supplementary_figure_s3_prior_bins_by_seed.csv"
-    donor_equal_bins_path = (
-        data_root / "supplementary_figure_s3_prior_bins_donor_equal.csv"
-    )
-    correlations_path = (
-        data_root / "supplementary_figure_s3_prior_correlations_by_seed.csv"
-    )
-    correlation_summary_path = (
-        data_root / "supplementary_figure_s3_prior_correlations_summary.csv"
-    )
-    bins.to_csv(bins_path, index=False)
-    donor_equal_bins.to_csv(donor_equal_bins_path, index=False)
-    correlations.to_csv(correlations_path, index=False)
-    correlation_summary.to_csv(correlation_summary_path, index=False)
-
-    figure_path = output_root / "supplementary_figure_s3_prior_dependence.png"
-    _plot_s3(bins, correlations, figure_path)
-    description_path = output_root / "supplementary_figure_s3_prior_dependence.md"
-    description_path.write_text(
-        "# HIHA prior-risk association figure\n\n"
-        "The figure diagnoses CoRe-OT at the endpoint-specific reported "
-        "operating points under the incomplete-reference condition, restricted "
-        "to query cells with the AIFI Level-2 cDC2 annotation. Prior-risk "
-        "curves use 20 target equal-frequency intervals based on average "
-        "within-split ranks; tied values remain together and empty intervals "
-        "are omitted. Donor-equal curve points require the same interval to be "
-        "occupied in all five donor splits.\n\n"
-        "Within-split Spearman correlations use average ranks. The prior-risk "
-        "correlation uses all finite within-cDC2 values. Pearson correlations "
-        "are retained as a sensitivity analysis. Across-split summaries are "
-        "descriptive.\n\n"
-        f"Prior bins: {bins_path}\n\n"
-        f"Donor-equal prior bins: {donor_equal_bins_path}\n\n"
-        f"Correlations: {correlations_path}\n\n"
-        f"Correlation summary: {correlation_summary_path}\n",
-        encoding="utf-8",
-    )
-    manifest_path = output_root / "supplementary_figure_s3_prior_dependence_manifest.yaml"
-    manifest_path.write_text(
-        yaml.safe_dump(
-            {
-                "figure": "hiha_prior_dependence",
-                "source_condition": "incomplete_reference",
-                "primary_method": "coreot_full",
-                "cohort": {
-                    "field": "AIFI_L2",
-                    "value": S3_CDC2_LABEL,
-                    "truth_stratification": False,
-                },
-                "scores": {
-                    "deficit": "u",
-                    "prior_risk": "prior_risk",
-                },
-                "held_out_labels": list(EXPECTED_HELD_OUT),
-                "seeds": list(range(1, 6)),
-                "candidate_set": candidate_set,
-                "binning": {
-                    "n_target_intervals": S3_N_PRIOR_INTERVALS,
-                    "scope": "within_split",
-                    "tie_method": "average_rank_keep_ties_together",
-                    "empty_interval": "omit",
-                    "donor_equal_summary": "complete_five_split_bin_index",
-                },
-                "correlations": {
-                    "primary": "spearman_average_rank",
-                    "sensitivity": "pearson",
-                    "prior_risk_eligibility": "finite_u_and_prior_risk",
-                    "p_values": False,
-                },
-                "input_path": str(input_path),
-                "outputs": {
-                    "figure_png": str(figure_path),
-                    "figure_pdf": str(figure_path.with_suffix(".pdf")),
-                    "figure_svg": str(figure_path.with_suffix(".svg")),
-                    "prior_bins_by_seed": str(bins_path),
-                    "prior_bins_donor_equal": str(donor_equal_bins_path),
-                    "correlations_by_seed": str(correlations_path),
-                    "correlations_summary": str(correlation_summary_path),
-                    "description": str(description_path),
-                },
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    return {
-        "figure_png": figure_path,
-        "figure_pdf": figure_path.with_suffix(".pdf"),
-        "figure_svg": figure_path.with_suffix(".svg"),
-        "prior_bins_by_seed": bins_path,
-        "prior_bins_donor_equal": donor_equal_bins_path,
-        "correlations_by_seed": correlations_path,
-        "correlations_summary": correlation_summary_path,
-        "description": description_path,
-        "manifest": manifest_path,
-    }
-
 
 
 def _read_s4_grid(
@@ -2286,7 +1746,7 @@ def write_hiha_s2(
         "All detection and operational metrics use query-marginal deficit u. "
         "Each condition's "
         "abstention threshold is the 95th percentile of its own paired "
-        "full-reference u distribution, with the normalized label-entropy "
+        "restored-reference-condition u distribution, with the normalized label-entropy "
         "cutoff fixed at theta_H=0.8.\n\n"
         f"Metrics by seed: {metrics_path}\n\n"
         f"Component effects by seed: {effects_path}\n",

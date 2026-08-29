@@ -279,7 +279,7 @@ def caption_text() -> str:
         "because the paired penalties coincide. Color scales are centered "
         "at zero and shared across endpoints within each metric but differ "
         "across metrics. Corresponding absolute differences are retained "
-        "as scale context in Supplementary Data 3.\n"
+        "as scale context in Supplementary Data 2.\n"
     )
 
 

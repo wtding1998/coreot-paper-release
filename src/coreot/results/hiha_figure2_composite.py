@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
+from typing import Iterable
 
 import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 from matplotlib.legend_handler import HandlerTuple
 from matplotlib.lines import Line2D
-from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Patch
+from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 from matplotlib.text import Text
+from matplotlib.transforms import Bbox
 import numpy as np
 import pandas as pd
 import yaml
@@ -28,13 +31,15 @@ from coreot.results.hiha_figure2 import (
     PANEL_C_COMPARATORS,
     PANEL_C_GROUPS,
     PANEL_D_LIM,
-    PANEL_D_METRICS,
     PANEL_D_METHODS,
     PANEL_D_XLABEL,
     PANEL_D_YLABEL,
     PANEL_E_CONTEXT_GRAY,
     PANEL_E_ELIGIBLE_GRAY,
+    PANEL_E_LEGEND_LABELS,
     PANEL_E_MAPS,
+    PANEL_A_REFERENCE_OMITTED_LABEL,
+    PANEL_A_RESTORED_LABEL,
     PANEL_E_TRUTH_COLOR,
     REPRESENTATIVE_SEED,
     PANEL_F_HELD_OUT_COLOR,
@@ -42,6 +47,7 @@ from coreot.results.hiha_figure2 import (
     PANEL_F_LABEL_COLORS,
     PANEL_F_MAPS,
     PANEL_F_REPRESENTED_POINT_SIZE,
+    PANEL_ROOT,
     PANEL_RASTER_DPI,
     QUERY_FILL,
     REFERENCE_FILL,
@@ -50,11 +56,55 @@ from coreot.results.hiha_figure2 import (
     SOURCE_DATA_ROOT,
     HIHAFigure2Error,
 )
+from coreot.results.main_metric_bars import (
+    FillMetricSpec,
+    draw_endpoint_metric_facet,
+    fill_metric_handles,
+)
 
 
 MAIN_FIGURE_SIZE_INCHES = (178 / 25.4, 230 / 25.4)
 MAIN_FIGURE_PANEL_SET = ("A", "B", "C", "D", "E", "F")
 MAIN_FIGURE_MIN_FONT_SIZE = 6.5
+PANEL_A_CONDITION_FONT_SIZE = 5.2
+PANEL_A_MIN_FONT_SIZE = 4.5
+PANEL_A_SMALL_TEXT_GIDS = frozenset(
+    {
+        "panel-a-scenario-title",
+        "panel-a-scenario-states",
+        "panel-a-split-label",
+        "panel-a-query-title",
+        "panel-a-query-detail",
+        "panel-a-reference-donor-label",
+        "panel-a-reference-omitted-title",
+        "panel-a-reference-omitted-detail",
+        "panel-a-restored-reference-title",
+        "panel-a-restored-reference-detail",
+    }
+)
+PANEL_B_ENDPOINT_FONT_SIZE = 5.8
+PANEL_B_ENDPOINT_GIDS = frozenset(
+    {
+        "panel-b-endpoint-label-hla-drhi-cdc2",
+        "panel-b-endpoint-label-isg-cdc2",
+    }
+)
+PANEL_C_METRICS = (
+    FillMetricSpec("average_precision", "AP", True),
+    FillMetricSpec("auroc", "AUROC", False),
+)
+PANEL_D_BAR_METRICS = (
+    FillMetricSpec("forced_accuracy", "Forced accuracy", True),
+    FillMetricSpec("forced_macro_f1", "Forced macro-F1", False),
+)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _read_csv(path: Path, required: set[str], panel: str) -> pd.DataFrame:
@@ -69,6 +119,17 @@ def _read_csv(path: Path, required: set[str], panel: str) -> pd.DataFrame:
     return frame
 
 
+def _resolve_source_path(
+    source_root: Path,
+    preferred_name: str,
+    legacy_name: str,
+) -> Path:
+    legacy = source_root / legacy_name
+    if legacy.is_file():
+        return legacy
+    return source_root / preferred_name
+
+
 def _require_exact_keys(
     frame: pd.DataFrame,
     *,
@@ -77,12 +138,8 @@ def _require_exact_keys(
     panel: str,
 ) -> None:
     if frame.duplicated(columns).any():
-        raise HIHAFigure2Error(
-            f"Composite Panel {panel} source has duplicate keys {columns}"
-        )
-    observed = set(
-        frame[columns].itertuples(index=False, name=None)
-    )
+        raise HIHAFigure2Error(f"Composite Panel {panel} source has duplicate keys {columns}")
+    observed = set(frame[columns].itertuples(index=False, name=None))
     if observed != expected:
         missing = sorted(expected - observed)
         extra = sorted(observed - expected)
@@ -119,9 +176,7 @@ def _read_composite_sources(
         "primary_evaluation",
     }
     if set(design) != required_design:
-        raise HIHAFigure2Error(
-            "Composite Panel A design fields differ from the standalone panel"
-        )
+        raise HIHAFigure2Error("Composite Panel A design fields differ from the standalone panel")
     if design["number_of_subjects"] != "108":
         raise HIHAFigure2Error("Composite Panel A requires the recorded 108 subjects")
     if "subject-level" not in design["donor_split"]:
@@ -135,6 +190,7 @@ def _read_composite_sources(
             "method",
             "score",
             "average_precision",
+            "auroc",
             "positive_prevalence",
         },
         "B",
@@ -185,9 +241,7 @@ def _read_composite_sources(
         },
         "C",
     )
-    expected_c_restoration = {
-        (endpoint, seed) for endpoint in ENDPOINTS for seed in range(1, 6)
-    }
+    expected_c_restoration = {(endpoint, seed) for endpoint in ENDPOINTS for seed in range(1, 6)}
     _require_exact_keys(
         panel_c_restoration,
         columns=["held_out_label", "seed"],
@@ -196,7 +250,11 @@ def _read_composite_sources(
     )
 
     panel_d = _read_csv(
-        source_root / "panel_d_label_transfer.csv",
+        _resolve_source_path(
+            source_root,
+            "panel_d_label_transfer.csv",
+            "panel_e_label_transfer.csv",
+        ),
         {
             "held_out_label",
             "seed",
@@ -221,7 +279,11 @@ def _read_composite_sources(
     )
 
     panel_e = _read_csv(
-        source_root / "panel_e_umap_cells.csv",
+        _resolve_source_path(
+            source_root,
+            "panel_e_umap_cells.csv",
+            "panel_d_umap_cells.csv",
+        ),
         {
             "held_out_label",
             "seed",
@@ -243,18 +305,12 @@ def _read_composite_sources(
         )
     if panel_e.duplicated(["held_out_label", "cell_id"]).any():
         if panel_e.duplicated(["held_out_label", "map_id", "cell_id"]).any():
-            raise HIHAFigure2Error(
-                "Composite Panel E has duplicate endpoint/map/cell IDs"
-            )
+            raise HIHAFigure2Error("Composite Panel E has duplicate endpoint/map/cell IDs")
     expected_e_maps = {
-        (endpoint, map_id)
-        for endpoint in ENDPOINTS
-        for map_id, _, _ in PANEL_E_MAPS
+        (endpoint, map_id) for endpoint in ENDPOINTS for map_id, _, _ in PANEL_E_MAPS
     }
     observed_e_maps = set(
-        panel_e[["held_out_label", "map_id"]]
-        .drop_duplicates()
-        .itertuples(index=False, name=None)
+        panel_e[["held_out_label", "map_id"]].drop_duplicates().itertuples(index=False, name=None)
     )
     if observed_e_maps != expected_e_maps:
         raise HIHAFigure2Error("Composite Panel E map keys differ from its contract")
@@ -274,15 +330,9 @@ def _read_composite_sources(
         },
         "F",
     )
-    expected_f_maps = {
-        (endpoint, map_id)
-        for endpoint in ENDPOINTS
-        for map_id, _ in PANEL_F_MAPS
-    }
+    expected_f_maps = {(endpoint, map_id) for endpoint in ENDPOINTS for map_id, _ in PANEL_F_MAPS}
     observed_f_maps = set(
-        panel_f[["held_out_label", "map_id"]]
-        .drop_duplicates()
-        .itertuples(index=False, name=None)
+        panel_f[["held_out_label", "map_id"]].drop_duplicates().itertuples(index=False, name=None)
     )
     if observed_f_maps != expected_f_maps:
         raise HIHAFigure2Error("Composite Panel F map keys differ from its contract")
@@ -291,12 +341,10 @@ def _read_composite_sources(
             f"Composite Panel F requires representative seed {REPRESENTATIVE_SEED}"
         )
     if panel_f.duplicated(["held_out_label", "map_id", "cell_id"]).any():
-        raise HIHAFigure2Error(
-            "Composite Panel F has duplicate endpoint/map/cell IDs"
-        )
+        raise HIHAFigure2Error("Composite Panel F has duplicate endpoint/map/cell IDs")
 
     numeric_frames = (
-        (panel_b, ("average_precision", "positive_prevalence"), "B"),
+        (panel_b, ("average_precision", "auroc", "positive_prevalence"), "C"),
         (
             panel_c_summary,
             ("median_u_ablated", "median_u_full"),
@@ -314,31 +362,27 @@ def _read_composite_sources(
     for frame, columns, panel in numeric_frames:
         values = frame.loc[:, columns].apply(pd.to_numeric, errors="coerce")
         if not np.isfinite(values.to_numpy(dtype=float)).all():
-            raise HIHAFigure2Error(
-                f"Composite Panel {panel} contains nonfinite plotted values"
-            )
+            raise HIHAFigure2Error(f"Composite Panel {panel} contains nonfinite plotted values")
         frame.loc[:, columns] = values
 
     for column in ("is_held_out_truth", "is_within_cdc2", "is_selected"):
         normalized = panel_e[column].astype(str).str.lower()
         if not normalized.isin({"true", "false"}).all():
-            raise HIHAFigure2Error(
-                f"Composite Panel E {column} is not a Boolean field"
-            )
+            raise HIHAFigure2Error(f"Composite Panel E {column} is not a Boolean field")
         panel_e[column] = normalized.eq("true")
 
     for column in ("is_represented_state", "is_held_out_state"):
         normalized = panel_f[column].astype(str).str.lower()
         if not normalized.isin({"true", "false"}).all():
-            raise HIHAFigure2Error(
-                f"Composite Panel F {column} is not a Boolean field"
-            )
+            raise HIHAFigure2Error(f"Composite Panel F {column} is not a Boolean field")
         panel_f[column] = normalized.eq("true")
 
-    if not panel_d["forced_macro_f1"].between(*PANEL_D_LIM).all():
-        raise HIHAFigure2Error("Composite Panel D macro-F1 falls outside its axis")
-    if not panel_d["forced_accuracy"].between(*PANEL_D_LIM).all():
-        raise HIHAFigure2Error("Composite Panel D accuracy falls outside its axis")
+    for column in ("average_precision", "auroc"):
+        if not panel_b[column].between(0, 1).all():
+            raise HIHAFigure2Error(f"Composite Panel C {column} falls outside [0, 1]")
+    for column in ("forced_macro_f1", "forced_accuracy"):
+        if not panel_d[column].between(0, 1).all():
+            raise HIHAFigure2Error(f"Composite Panel D {column} falls outside [0, 1]")
 
     return (
         design,
@@ -428,23 +472,23 @@ def _draw_panel_a(fig: plt.Figure, design: dict[str, str]) -> None:
         0.24,
         0.115,
         0.45,
-        "Subject-level\n80% / 20% split",
+        "Donor-level split\n80% reference / 20% query",
         facecolor=REFERENCE_FILL,
     )
     _arrow(ax, (0.118, 0.465), (0.147, 0.465))
 
     _box(
         ax,
-        0.31,
+        0.35,
         0.58,
         0.16,
         0.25,
-        "Query 20%\nall states retained",
+        "Query cells\nall states retained",
         facecolor=QUERY_FILL,
     )
     _box(
         ax,
-        0.31,
+        0.35,
         0.16,
         0.16,
         0.25,
@@ -460,7 +504,7 @@ def _draw_panel_a(fig: plt.Figure, design: dict[str, str]) -> None:
         0.42,
         0.17,
         0.25,
-        "Ablated reference\ntarget absent",
+        PANEL_A_REFERENCE_OMITTED_LABEL,
         facecolor="#FCE7DF",
         edgecolor=HELD_OUT,
     )
@@ -470,7 +514,7 @@ def _draw_panel_a(fig: plt.Figure, design: dict[str, str]) -> None:
         0.11,
         0.17,
         0.25,
-        "Matched full reference\ntarget present",
+        PANEL_A_RESTORED_LABEL,
         facecolor="#E3F3EC",
         edgecolor=RESTORED,
     )
@@ -484,9 +528,12 @@ def _draw_panel_a(fig: plt.Figure, design: dict[str, str]) -> None:
         0.225,
         0.55,
         (
-            "Within-cDC2 evaluation\n"
-            "Ablated: held-out-state ranking\n"
-            "Ablated vs full: deficit rescue"
+            "HIHA dendritic-cell benchmark\n"
+            "Evaluated fine states: HLA-DRhi cDC2, ISG+ cDC2\n"
+            "within-cDC2 omitted-state ranking\n"
+            "Reference-omitted condition: omitted-state ranking\n"
+            "Restored-reference condition: paired reference-restoration response\n"
+            "Same query cells"
         ),
         facecolor="#F7F7F7",
         edgecolor=INK,
@@ -586,7 +633,7 @@ def _draw_panels_b_c(
     fig.text(
         0.255,
         0.818,
-        "AP for held-out-state ranking • dashed = mean prevalence",
+        "AP for omitted-state ranking • dashed = mean prevalence",
         fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
         ha="center",
         va="top",
@@ -643,9 +690,7 @@ def _draw_panels_b_c(
             xticks=[0, 0.5, 1],
             show_ylabels=index == 0,
         )
-        prevalence = float(
-            b_endpoint.groupby("seed")["positive_prevalence"].first().mean()
-        )
+        prevalence = float(b_endpoint.groupby("seed")["positive_prevalence"].first().mean())
         b_axes[index].axvline(
             prevalence,
             color="#777777",
@@ -672,9 +717,9 @@ def _draw_panels_b_c(
         c_axes[index].set_title(endpoint, fontsize=6.7, pad=3)
 
     fig.text(
-        0.30,
+        0.33,
         0.64,
-        "Average precision (AP)",
+        "AP",
         fontsize=6.4,
         ha="center",
         va="center",
@@ -683,7 +728,7 @@ def _draw_panels_b_c(
     fig.text(
         0.80,
         0.64,
-        r"Paired $\Delta$AP (positive favors Full)",
+        r"Paired $\Delta$AP (positive favors restored-reference condition)",
         fontsize=6.4,
         ha="center",
         va="center",
@@ -772,7 +817,7 @@ def _draw_panel_b_main(fig: plt.Figure, panel_b: pd.DataFrame) -> None:
     fig.text(
         0.54,
         0.657,
-        "Average precision (AP) for held-out-state ranking",
+        "AP for omitted-state ranking",
         fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
         ha="center",
         va="top",
@@ -835,17 +880,14 @@ def _draw_panel_d(
     y_positions = (0.515, 0.425)
     height = 0.07
     axes = [
-        [
-            fig.add_axes((x_positions[column], y, widths[column], height))
-            for column in range(4)
-        ]
+        [fig.add_axes((x_positions[column], y, widths[column], height)) for column in range(4)]
         for y in y_positions
     ]
     column_titles = (
-        "Held-out cells",
+        "Reference-omitted cells",
         "Represented cDC2",
         r"Rescue specificity $R$",
-        "Restored-state probability",
+        "Median restored-state destination fraction",
     )
     for column, title in enumerate(column_titles):
         axes[0][column].set_title(title, fontsize=6.4, pad=3)
@@ -887,7 +929,7 @@ def _draw_panel_d(
                     zorder=2,
                 )
             ax.set(xlim=(-0.2, 1.2), ylim=(0, 0.25))
-            ax.set_xticks([0, 1], ["Ablated", "Full"])
+            ax.set_xticks([0, 1], ["Reference-omitted", "Restored-reference"])
             if column == 0:
                 ax.set_ylabel(
                     "Median raw $u$",
@@ -947,6 +989,8 @@ def _draw_panel_d(
             else:
                 ax.set_ylim((0, 1.02))
             _style_panel_d_axis(ax)
+
+
 def _draw_panel_e(fig: plt.Figure, cells: pd.DataFrame) -> None:
     fig.text(0.025, 0.395, "D", fontsize=10, fontweight="bold", ha="left", va="top")
 
@@ -955,10 +999,7 @@ def _draw_panel_e(fig: plt.Figure, cells: pd.DataFrame) -> None:
     width = 0.41
     height = 0.05
     axes = [
-        [
-            fig.add_axes((x_positions[column], y, width, height))
-            for column in range(2)
-        ]
+        [fig.add_axes((x_positions[column], y, width, height)) for column in range(2)]
         for y in y_positions
     ]
     deficit_cmap = plt.get_cmap("viridis")
@@ -1085,7 +1126,7 @@ def _draw_panel_e(fig: plt.Figure, cells: pd.DataFrame) -> None:
     fig.legend(
         handles=destination_handles,
         loc="lower center",
-        ncol=4,
+        ncol=2,
         frameon=False,
         bbox_to_anchor=(0.72, 0.215),
         fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
@@ -1105,7 +1146,7 @@ def _draw_panel_e(fig: plt.Figure, cells: pd.DataFrame) -> None:
                 markeredgecolor=INK,
                 markeredgewidth=0.55,
                 markersize=3.8,
-                label="Held-out truth (left)",
+                label="Reference-omitted cells (left)",
             ),
             Line2D(
                 [0],
@@ -1116,7 +1157,7 @@ def _draw_panel_e(fig: plt.Figure, cells: pd.DataFrame) -> None:
                 markeredgecolor=INK,
                 markeredgewidth=0.65,
                 markersize=4,
-                label="Above full-reference $u$ 95th percentile (right)",
+                label="Above restored-reference $u$ 95th percentile (right)",
             ),
         ],
         loc="lower center",
@@ -1143,9 +1184,7 @@ def _draw_panel_d_label_transfer_main(
     for index, (axis, endpoint) in enumerate(zip(axes, ENDPOINTS, strict=True)):
         endpoint_data = panel_d.loc[panel_d["held_out_label"].eq(endpoint)]
         for method, _, _ in PANEL_D_METHODS:
-            method_data = endpoint_data.loc[
-                endpoint_data["method"].eq(method)
-            ].sort_values("seed")
+            method_data = endpoint_data.loc[endpoint_data["method"].eq(method)].sort_values("seed")
             macro_f1 = method_data["forced_macro_f1"].to_numpy(dtype=float)
             accuracy = method_data["forced_accuracy"].to_numpy(dtype=float)
             mean_macro_f1 = float(macro_f1.mean())
@@ -1326,9 +1365,7 @@ def _draw_panel_d_main(fig: plt.Figure, panel_d: pd.DataFrame) -> None:
                 linewidth=0,
                 rasterized=True,
             )
-            highlight = (
-                PANEL_E_TRUTH_COLOR if map_id == "truth" else METHOD_COLORS[map_id]
-            )
+            highlight = PANEL_E_TRUTH_COLOR if map_id == "truth" else METHOD_COLORS[map_id]
             axis.scatter(
                 selected["umap_1"],
                 selected["umap_2"],
@@ -1364,7 +1401,7 @@ def _draw_panel_d_main(fig: plt.Figure, panel_d: pd.DataFrame) -> None:
                 markerfacecolor=PANEL_E_TRUTH_COLOR,
                 markeredgecolor="none",
                 markersize=3.5,
-                label="Held-out truth",
+                label="Reference-omitted cells",
             ),
             Line2D(
                 [0],
@@ -1384,7 +1421,7 @@ def _draw_panel_d_main(fig: plt.Figure, panel_d: pd.DataFrame) -> None:
                 markerfacecolor=PANEL_E_ELIGIBLE_GRAY,
                 markeredgecolor="none",
                 markersize=3.5,
-                label="Other cDC2",
+                label="Other ranking-cohort cells",
             ),
             Line2D(
                 [0],
@@ -1394,16 +1431,16 @@ def _draw_panel_d_main(fig: plt.Figure, panel_d: pd.DataFrame) -> None:
                 markerfacecolor=PANEL_E_CONTEXT_GRAY,
                 markeredgecolor="none",
                 markersize=3.5,
-                label="Outside cDC2 cohort",
+                label="Outside ranking cohort",
             ),
         ],
         loc="lower center",
-        ncol=4,
+        ncol=2,
         frameon=False,
-        bbox_to_anchor=(0.535, 0.19),
+        bbox_to_anchor=(0.46, 0.20),
         fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
         handletextpad=0.3,
-        columnspacing=0.9,
+        columnspacing=0.5,
     )
 
 
@@ -1411,88 +1448,303 @@ def _draw_panel_a_narrow(fig: plt.Figure, design: dict[str, str]) -> None:
     ax = fig.add_axes((0.025, 0.785, 0.275, 0.20))
     ax.set(xlim=(0, 1), ylim=(0, 1))
     ax.axis("off")
-    ax.text(0.0, 0.99, "A", fontsize=10, fontweight="bold", ha="left", va="top")
+    del design  # The compact panel intentionally omits cohort-size metadata.
 
-    _box(
-        ax,
-        0.16,
-        0.80,
-        0.68,
-        0.13,
-        f"HIHA DCs\n{design['number_of_subjects']} subjects",
-        facecolor=REFERENCE_FILL,
-    )
-    _box(
-        ax,
-        0.16,
-        0.62,
-        0.68,
-        0.12,
-        "Subject-level split",
-        facecolor=REFERENCE_FILL,
-    )
-    _arrow(ax, (0.50, 0.80), (0.50, 0.745))
+    neutral_fill = "#F2F2F2"
+    query_fill = "#EAF2F7"
+    query_edge = "#6B9FBC"
+    omitted_fill = "#FFF1EA"
+    restored_fill = "#E9F5EF"
 
-    _box(
-        ax,
-        0.03,
-        0.31,
-        0.43,
-        0.25,
-        "Query 20%\nall states retained",
-        facecolor=QUERY_FILL,
+    def add_box(
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        *,
+        facecolor: str,
+        edgecolor: str,
+        radius: float = 0.018,
+    ) -> None:
+        ax.add_patch(
+            FancyBboxPatch(
+                (x, y),
+                width,
+                height,
+                boxstyle=f"round,pad=0,rounding_size={radius}",
+                linewidth=0.85,
+                edgecolor=edgecolor,
+                facecolor=facecolor,
+                zorder=3,
+            )
+        )
+
+    def add_line(
+        start: tuple[float, float],
+        end: tuple[float, float],
+        *,
+        color: str = MUTED_INK,
+        linewidth: float = 0.95,
+    ) -> None:
+        ax.plot(
+            (start[0], end[0]),
+            (start[1], end[1]),
+            color=color,
+            linewidth=linewidth,
+            solid_capstyle="butt",
+            clip_on=False,
+            zorder=1,
+        )
+
+    def add_arrow(
+        start: tuple[float, float],
+        end: tuple[float, float],
+        *,
+        color: str = MUTED_INK,
+        linewidth: float = 0.95,
+        mutation_scale: float = 6.5,
+    ) -> None:
+        ax.add_patch(
+            FancyArrowPatch(
+                start,
+                end,
+                arrowstyle="-|>",
+                mutation_scale=mutation_scale,
+                linewidth=linewidth,
+                color=color,
+                shrinkA=0,
+                shrinkB=0,
+                connectionstyle="arc3,rad=0",
+                clip_on=False,
+                zorder=2,
+            )
+        )
+
+    ax.text(
+        0.026,
+        0.962,
+        "A",
+        fontsize=9,
+        fontweight="bold",
+        fontfamily="Arial",
+        ha="left",
+        va="top",
     )
-    _box(
-        ax,
-        0.54,
-        0.31,
-        0.43,
-        0.25,
-        "",
-        facecolor=REFERENCE_FILL,
+
+    scenario_x, scenario_y, scenario_w, scenario_h = 0.180, 0.835, 0.660, 0.122
+    split_x, split_y, split_w, split_h = 0.180, 0.680, 0.660, 0.086
+    query_x, query_y, query_w, query_h = 0.020, 0.240, 0.400, 0.245
+    omit_x, omit_y, omit_w, omit_h = 0.515, 0.370, 0.415, 0.215
+    restore_x, restore_y, restore_w, restore_h = 0.515, 0.075, 0.415, 0.215
+
+    add_box(
+        scenario_x,
+        scenario_y,
+        scenario_w,
+        scenario_h,
+        facecolor=neutral_fill,
+        edgecolor=LIGHT_EDGE,
     )
     ax.text(
-        0.755,
-        0.49,
-        "Reference 80%",
+        scenario_x + scenario_w / 2,
+        scenario_y + scenario_h * 0.66,
+        "Separate scenarios",
         ha="center",
         va="center",
-        fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
+        fontsize=5.8,
+        fontfamily="Arial",
         color=INK,
+        gid="panel-a-scenario-title",
+        zorder=5,
     )
     ax.text(
-        0.755,
-        0.405,
-        "Ablated: removed",
+        scenario_x + scenario_w / 2,
+        scenario_y + scenario_h * 0.34,
+        "HLA-DRhi cDC2 | ISG+ cDC2",
         ha="center",
         va="center",
-        fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
-        color=HELD_OUT,
+        fontsize=5.45,
+        fontfamily="Arial",
+        color=INK,
+        gid="panel-a-scenario-states",
+        zorder=5,
     )
-    ax.text(
-        0.755,
-        0.345,
-        "Full: restored",
-        ha="center",
-        va="center",
-        fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
-        color=RESTORED,
-    )
-    _arrow(ax, (0.43, 0.62), (0.25, 0.565))
-    _arrow(ax, (0.57, 0.62), (0.75, 0.565))
 
-    _box(
-        ax,
-        0.12,
-        0.03,
-        0.76,
-        0.14,
-        "Within-cDC2\nranking · rescue",
-        facecolor="#F7F7F7",
-        edgecolor=INK,
+    add_box(
+        split_x,
+        split_y,
+        split_w,
+        split_h,
+        facecolor=neutral_fill,
+        edgecolor=LIGHT_EDGE,
+        radius=0.014,
     )
-    _arrow(ax, (0.25, 0.31), (0.40, 0.175))
-    _arrow(ax, (0.75, 0.31), (0.60, 0.175))
+    ax.text(
+        split_x + split_w / 2,
+        split_y + split_h / 2,
+        "Five donor splits",
+        ha="center",
+        va="center",
+        fontsize=6.0,
+        fontfamily="Arial",
+        color=INK,
+        gid="panel-a-split-label",
+        zorder=5,
+    )
+    add_arrow(
+        (scenario_x + scenario_w / 2, scenario_y),
+        (split_x + split_w / 2, split_y + split_h),
+    )
+
+    add_box(
+        query_x,
+        query_y,
+        query_w,
+        query_h,
+        facecolor=query_fill,
+        edgecolor=query_edge,
+    )
+    ax.text(
+        query_x + query_w / 2,
+        query_y + query_h * 0.69,
+        "Same query cells",
+        ha="center",
+        va="center",
+        fontsize=5.6,
+        fontweight="semibold",
+        fontfamily="Arial",
+        color=INK,
+        gid="panel-a-query-title",
+        zorder=5,
+    )
+    ax.text(
+        query_x + query_w / 2,
+        query_y + query_h * 0.36,
+        "Evaluated state\nretained",
+        ha="center",
+        va="center",
+        fontsize=5.3,
+        fontfamily="Arial",
+        color=INK,
+        linespacing=1.18,
+        gid="panel-a-query-detail",
+        zorder=5,
+    )
+
+    add_box(
+        omit_x,
+        omit_y,
+        omit_w,
+        omit_h,
+        facecolor=omitted_fill,
+        edgecolor=HELD_OUT,
+    )
+    ax.text(
+        omit_x + omit_w / 2,
+        omit_y + omit_h * 0.70,
+        PANEL_A_REFERENCE_OMITTED_LABEL,
+        ha="center",
+        va="center",
+        fontsize=PANEL_A_CONDITION_FONT_SIZE,
+        fontweight="semibold",
+        fontfamily="Arial",
+        color=HELD_OUT,
+        linespacing=1.06,
+        gid="panel-a-reference-omitted-title",
+        zorder=5,
+    )
+    ax.text(
+        omit_x + omit_w / 2,
+        omit_y + omit_h * 0.28,
+        "Evaluated-state cells\nomitted",
+        ha="center",
+        va="center",
+        fontsize=4.9,
+        fontfamily="Arial",
+        color=INK,
+        linespacing=1.12,
+        gid="panel-a-reference-omitted-detail",
+        zorder=5,
+    )
+
+    add_box(
+        restore_x,
+        restore_y,
+        restore_w,
+        restore_h,
+        facecolor=restored_fill,
+        edgecolor=RESTORED,
+    )
+    ax.text(
+        restore_x + restore_w / 2,
+        restore_y + restore_h * 0.70,
+        PANEL_A_RESTORED_LABEL,
+        ha="center",
+        va="center",
+        fontsize=PANEL_A_CONDITION_FONT_SIZE,
+        fontweight="semibold",
+        fontfamily="Arial",
+        color=RESTORED,
+        linespacing=1.06,
+        gid="panel-a-restored-reference-title",
+        zorder=5,
+    )
+    ax.text(
+        restore_x + restore_w / 2,
+        restore_y + restore_h * 0.28,
+        "Omitted-state cells\nrestored",
+        ha="center",
+        va="center",
+        fontsize=4.9,
+        fontfamily="Arial",
+        color=INK,
+        linespacing=1.12,
+        gid="panel-a-restored-reference-detail",
+        zorder=5,
+    )
+
+    split_center_x = split_x + split_w / 2
+    branch_y = 0.615
+    query_branch_x = query_x + query_w / 2
+    reference_trunk_x = 0.980
+    omit_center_y = omit_y + omit_h / 2
+    restore_center_y = restore_y + restore_h / 2
+
+    add_line((split_center_x, split_y), (split_center_x, branch_y))
+    add_line((split_center_x, branch_y), (query_branch_x, branch_y))
+    add_arrow((query_branch_x, branch_y), (query_branch_x, query_y + query_h))
+    add_line((split_center_x, branch_y), (reference_trunk_x, branch_y))
+    ax.text(
+        0.720,
+        branch_y,
+        "Same reference donors",
+        ha="center",
+        va="center",
+        fontsize=PANEL_A_MIN_FONT_SIZE,
+        fontfamily="Arial",
+        color=INK,
+        bbox={"boxstyle": "square,pad=0.10", "facecolor": "white", "edgecolor": "none"},
+        gid="panel-a-reference-donor-label",
+        zorder=7,
+    )
+    add_line((reference_trunk_x, branch_y), (reference_trunk_x, restore_center_y))
+    add_arrow((reference_trunk_x, omit_center_y), (omit_x + omit_w, omit_center_y))
+    add_arrow((reference_trunk_x, restore_center_y), (restore_x + restore_w, restore_center_y))
+
+    add_arrow(
+        (query_x + query_w, query_y + query_h * 0.66),
+        (omit_x, omit_y + omit_h * 0.56),
+        color=query_edge,
+        linewidth=1.15,
+        mutation_scale=7.0,
+    )
+    add_arrow(
+        (query_x + query_w, query_y + query_h * 0.31),
+        (restore_x, restore_y + restore_h * 0.54),
+        color=query_edge,
+        linewidth=1.15,
+        mutation_scale=7.0,
+    )
 
 
 def _draw_panel_b_wide(fig: plt.Figure, panel_b: pd.DataFrame) -> None:
@@ -1528,7 +1780,7 @@ def _draw_panel_b_wide(fig: plt.Figure, panel_b: pd.DataFrame) -> None:
     fig.text(
         0.68,
         0.812,
-        "Average precision (AP) for held-out-state ranking",
+        "AP for omitted-state ranking",
         fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
         ha="center",
         va="top",
@@ -1591,12 +1843,10 @@ def _rescue_source(
     pivot.columns = ["_".join(column) for column in pivot.columns]
     result = pivot.reset_index()
     result["held_out_delta_median_u"] = (
-        result["median_u_ablated_held_out"]
-        - result["median_u_full_held_out"]
+        result["median_u_ablated_held_out"] - result["median_u_full_held_out"]
     )
     result["control_delta_median_u"] = (
-        result["median_u_ablated_represented_cdc2"]
-        - result["median_u_full_represented_cdc2"]
+        result["median_u_ablated_represented_cdc2"] - result["median_u_full_represented_cdc2"]
     )
     return result.merge(
         restoration[
@@ -1612,228 +1862,200 @@ def _rescue_source(
     )
 
 
-def _draw_panel_c_half(
+def _draw_panel_b_restoration(
     fig: plt.Figure,
     summary: pd.DataFrame,
     restoration: pd.DataFrame,
 ) -> None:
-    fig.text(0.025, 0.755, "C", fontsize=10, fontweight="bold", ha="left", va="top")
+    fig.text(0.32, 0.985, "B", fontsize=10, fontweight="bold", ha="left", va="top")
     data = _rescue_source(summary, restoration)
-    rescue_axis = fig.add_axes((0.19, 0.515, 0.20, 0.205))
-    probability_axis = fig.add_axes((0.425, 0.515, 0.055, 0.205), sharey=rescue_axis)
+    axis = fig.add_axes((0.54, 0.82, 0.37, 0.135))
     rows = (
-        ("held_out_delta_median_u", "Held-out cells", METHOD_COLORS["coreot_full"]),
-        ("control_delta_median_u", "Represented cDC2", "#777777"),
+        (
+            "held_out_delta_median_u",
+            "Reference-omitted cells",
+            METHOD_COLORS["coreot_full"],
+        ),
+        ("control_delta_median_u", "Represented cDC2 controls", "#777777"),
         (
             "restoration_specificity",
-            "Control-adjusted, $\\Delta^{\\mathrm{CA}}$",
+            "Control-adjusted $\\Delta^{\\mathrm{CA}}$",
             HELD_OUT,
+        ),
+        (
+            "median_restored_state_probability",
+            "Restored-state destination fraction",
+            RESTORED,
         ),
     )
     positions = {
-        ENDPOINTS[0]: np.array([5.4, 4.4, 3.4]),
-        ENDPOINTS[1]: np.array([1.8, 0.8, -0.2]),
+        ENDPOINTS[0]: np.array([7.0, 6.1, 5.2, 4.3]),
+        ENDPOINTS[1]: np.array([2.7, 1.8, 0.9, 0.0]),
     }
-    offsets = np.linspace(-0.14, 0.14, 5)
-    plotted = data[
-        [
-            "held_out_delta_median_u",
-            "control_delta_median_u",
-            "restoration_specificity",
-        ]
-    ].to_numpy(dtype=float)
-    lower = min(-0.01, float(np.floor((plotted.min() - 0.01) / 0.02) * 0.02))
-    upper = max(0.02, float(np.ceil((plotted.max() + 0.01) / 0.02) * 0.02))
     for endpoint in ENDPOINTS:
-        endpoint_data = data.loc[data["held_out_label"].eq(endpoint)].sort_values(
-            "seed"
-        )
-        center = float(positions[endpoint].mean())
-        for position, (column, _, color) in zip(
-            positions[endpoint], rows, strict=True
-        ):
+        endpoint_data = data.loc[data["held_out_label"].eq(endpoint)].sort_values("seed")
+        for position, (column, _, color) in zip(positions[endpoint], rows, strict=True):
             values = endpoint_data[column].to_numpy(dtype=float)
-            rescue_axis.scatter(
-                values,
-                position + offsets,
-                s=9,
-                color=color,
-                alpha=0.45,
-                linewidth=0,
-                zorder=3,
-            )
-            rescue_axis.errorbar(
-                float(values.mean()),
+            bars = axis.barh(
                 position,
+                float(values.mean()),
+                height=0.55,
                 xerr=float(values.std(ddof=1)),
-                fmt="o",
-                markersize=3.8,
-                markerfacecolor=color,
-                markeredgecolor=INK,
-                markeredgewidth=0.45,
-                ecolor=color,
-                elinewidth=0.8,
-                capsize=2,
-                zorder=4,
+                facecolor=color,
+                edgecolor=color,
+                linewidth=0.9,
+                error_kw={
+                    "ecolor": INK,
+                    "elinewidth": 0.65,
+                    "capsize": 1.5,
+                    "capthick": 0.65,
+                },
+                zorder=2,
             )
-        probabilities = endpoint_data[
-            "median_restored_state_probability"
-        ].to_numpy(dtype=float)
-        probability_axis.scatter(
-            probabilities,
-            center + offsets,
-            s=9,
-            color=RESTORED,
-            alpha=0.45,
-            linewidth=0,
-            zorder=3,
-        )
-        probability_axis.errorbar(
-            float(probabilities.mean()),
-            center,
-            xerr=float(probabilities.std(ddof=1)),
-            fmt="o",
-            markersize=3.8,
-            markerfacecolor=RESTORED,
-            markeredgecolor=INK,
-            markeredgewidth=0.45,
-            ecolor=RESTORED,
-            elinewidth=0.8,
-            capsize=2,
-            zorder=4,
-        )
-        y_fraction = (center + 0.7) / 6.6
+            bars.patches[0].set_gid(
+                f"panel-b-bar-{endpoint}-{column}".replace(" ", "_")
+            )
+    endpoint_labels = (
+        (ENDPOINTS[0], 0.925, "panel-b-endpoint-label-hla-drhi-cdc2"),
+        (ENDPOINTS[1], 0.85, "panel-b-endpoint-label-isg-cdc2"),
+    )
+    for endpoint, y_position, gid in endpoint_labels:
         fig.text(
-            0.025,
-            0.515 + 0.205 * y_fraction,
+            0.975,
+            y_position,
             endpoint,
-            fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
-            fontweight="bold",
-            rotation=90,
+            fontsize=PANEL_B_ENDPOINT_FONT_SIZE,
+            fontweight="normal",
+            rotation=270,
             ha="center",
             va="center",
             color=INK,
+            gid=gid,
         )
     row_positions = np.concatenate([positions[endpoint] for endpoint in ENDPOINTS])
     row_labels = [label for _ in ENDPOINTS for _, label, _ in rows]
-    rescue_axis.axvline(0, color=INK, linewidth=0.7)
-    rescue_axis.axhline(2.6, color="#B8B8B8", linewidth=0.7)
-    rescue_axis.set(
-        xlim=(lower, upper),
-        ylim=(-0.7, 5.9),
+    axis.axhline(3.5, color="#B8B8B8", linewidth=0.7)
+    axis.set(
+        xlim=(0.0, 1.02),
+        ylim=(-0.55, 7.55),
+        xticks=(0.0, 0.5, 1.0),
         yticks=row_positions,
         yticklabels=row_labels,
     )
-    rescue_axis.tick_params(axis="both", labelsize=MAIN_FIGURE_MIN_FONT_SIZE)
-    rescue_axis.grid(axis="x", color="#E5E5E5", linewidth=0.45)
-    rescue_axis.spines[["top", "right"]].set_visible(False)
-    rescue_axis.set_xlabel(
-        "Median-deficit decrease",
+    axis.tick_params(axis="x", labelsize=MAIN_FIGURE_MIN_FONT_SIZE, length=2, pad=1)
+    axis.tick_params(axis="y", labelsize=MAIN_FIGURE_MIN_FONT_SIZE, length=0, pad=2.5)
+    axis.grid(axis="x", color="#E5E5E5", linewidth=0.45)
+    axis.set_axisbelow(True)
+    axis.spines[["top", "right", "left"]].set_visible(False)
+    axis.set_xlabel(
+        "Metric value",
         fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
-        labelpad=3,
-    )
-    probability_axis.axhline(2.6, color="#B8B8B8", linewidth=0.7)
-    probability_axis.set(xlim=(-0.03, 1.05), ylim=(-0.7, 5.9), xticks=(0, 0.5, 1))
-    probability_axis.tick_params(
-        axis="x", labelsize=MAIN_FIGURE_MIN_FONT_SIZE, pad=1
-    )
-    probability_axis.tick_params(axis="y", left=False, labelleft=False)
-    probability_axis.grid(axis="x", color="#E5E5E5", linewidth=0.45)
-    probability_axis.spines[["top", "right", "left"]].set_visible(False)
-    probability_axis.set_xlabel(
-        "Restored-state\nprobability",
-        fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
-        labelpad=3,
+        labelpad=2,
     )
 
 
-def _draw_panel_d_half(fig: plt.Figure, panel_d: pd.DataFrame) -> None:
-    fig.text(0.515, 0.755, "D", fontsize=10, fontweight="bold", ha="left", va="top")
+def _draw_panel_c_metric_bars(fig: plt.Figure, panel_c: pd.DataFrame) -> None:
+    fig.text(0.025, 0.755, "C", fontsize=10, fontweight="bold", ha="left", va="top")
+    method_order = tuple(method for method, _, _ in PANEL_B_METHODS)
     method_labels = {
-        method: display for method, _, display in PANEL_D_METHODS
+        method: "scmap-\ncluster" if display == "scmap-cluster" else display
+        for method, _, display in PANEL_B_METHODS
     }
-    positions = np.arange(len(PANEL_D_METHODS), dtype=float)
-    metric_offsets = (-0.15, 0.15)
     axes = (
-        fig.add_axes((0.635, 0.625, 0.325, 0.09)),
-        fig.add_axes((0.635, 0.50, 0.325, 0.09)),
+        fig.add_axes((0.13, 0.515, 0.155, 0.185)),
+        fig.add_axes((0.33, 0.515, 0.155, 0.185)),
     )
     for index, (axis, endpoint) in enumerate(zip(axes, ENDPOINTS, strict=True)):
-        endpoint_data = panel_d.loc[panel_d["held_out_label"].eq(endpoint)]
-        for method_index, (method, _, _) in enumerate(PANEL_D_METHODS):
-            method_data = endpoint_data.loc[
-                endpoint_data["method"].eq(method)
-            ].sort_values("seed")
-            for metric_index, (metric, _, color) in enumerate(PANEL_D_METRICS):
-                values = method_data[metric].to_numpy(dtype=float)
-                mean = float(values.mean())
-                sample_sd = float(values.std(ddof=1))
-                center = positions[method_index] + metric_offsets[metric_index]
-                axis.barh(
-                    center,
-                    mean - PANEL_D_LIM[0],
-                    height=0.18,
-                    left=PANEL_D_LIM[0],
-                    color=color,
-                    alpha=0.48,
-                    edgecolor=color,
-                    linewidth=0.55,
-                    zorder=2,
-                )
-                axis.errorbar(
-                    mean,
-                    center,
-                    xerr=sample_sd,
-                    fmt="none",
-                    ecolor=INK,
-                    elinewidth=0.7,
-                    capsize=1.8,
-                    capthick=0.7,
-                    zorder=4,
-                )
-        axis.set(
-            xlim=PANEL_D_LIM,
-            ylim=(len(PANEL_D_METHODS) - 0.5, -0.5),
-            xticks=np.arange(0.80, 1.001, 0.05),
-            yticks=positions,
+        draw_endpoint_metric_facet(
+            axis,
+            panel_c,
+            endpoint_column="held_out_label",
+            endpoint=endpoint,
+            endpoint_label=endpoint,
+            method_order=method_order,
+            method_labels=method_labels,
+            method_colors=METHOD_COLORS,
+            metrics=PANEL_C_METRICS,
+            ink=INK,
+            grid_color="#E8E8E8",
+            show_method_labels=index == 0,
+            prevalence_column="positive_prevalence",
+            font_size=MAIN_FIGURE_MIN_FONT_SIZE,
         )
-        axis.set_title(endpoint, fontsize=7.0, pad=3)
-        axis.set_yticklabels(
-            [method_labels[method] for method, _, _ in PANEL_D_METHODS],
-            fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
-        )
-        axis.tick_params(
-            axis="x", labelsize=MAIN_FIGURE_MIN_FONT_SIZE, length=2, pad=1
-        )
-        if index == 0:
-            axis.tick_params(axis="x", labelbottom=False)
-        axis.tick_params(axis="y", length=0, pad=2)
-        axis.grid(axis="x", color="#E8E8E8", linewidth=0.45)
-        axis.set_axisbelow(True)
-        axis.spines[["top", "right", "left"]].set_visible(False)
     fig.legend(
         handles=[
-            Patch(
-                facecolor=color,
-                edgecolor=color,
-                linewidth=0.55,
-                alpha=0.55,
-                label=display,
+            *fill_metric_handles(PANEL_C_METRICS, color=INK),
+            Line2D(
+                [0],
+                [0],
+                color="#666666",
+                linestyle=(0, (3, 2)),
+                linewidth=0.9,
+                label="Mean prevalence (AP)",
             )
-            for _, display, color in PANEL_D_METRICS
         ],
+        loc="upper center",
+        ncol=3,
+        frameon=False,
+        bbox_to_anchor=(0.305, 0.755),
+        fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
+        handlelength=1.3,
+        handletextpad=0.3,
+        columnspacing=0.65,
+    )
+    fig.text(
+        0.31,
+        0.49,
+        "Metric value",
+        fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
+        ha="center",
+        va="top",
+        color=INK,
+    )
+
+
+def _draw_panel_d_metric_bars(fig: plt.Figure, panel_d: pd.DataFrame) -> None:
+    fig.text(0.515, 0.755, "D", fontsize=10, fontweight="bold", ha="left", va="top")
+    method_order = tuple(method for method, _, _ in PANEL_D_METHODS)
+    method_labels = {
+        method: "scmap-\ncluster" if display == "scmap-cluster" else display
+        for method, _, display in PANEL_D_METHODS
+    }
+    axes = (
+        fig.add_axes((0.625, 0.515, 0.16, 0.185)),
+        fig.add_axes((0.815, 0.515, 0.16, 0.185)),
+    )
+    for index, (axis, endpoint) in enumerate(zip(axes, ENDPOINTS, strict=True)):
+        draw_endpoint_metric_facet(
+            axis,
+            panel_d,
+            endpoint_column="held_out_label",
+            endpoint=endpoint,
+            endpoint_label=endpoint,
+            method_order=method_order,
+            method_labels=method_labels,
+            method_colors=METHOD_COLORS,
+            metrics=PANEL_D_BAR_METRICS,
+            ink=INK,
+            grid_color="#E8E8E8",
+            show_method_labels=index == 0,
+            font_size=MAIN_FIGURE_MIN_FONT_SIZE,
+        )
+    fig.legend(
+        handles=fill_metric_handles(PANEL_D_BAR_METRICS, color=INK),
         loc="upper center",
         ncol=2,
         frameon=False,
-        bbox_to_anchor=(0.75, 0.752),
+        bbox_to_anchor=(0.80, 0.755),
         fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
-        handletextpad=0.35,
-        columnspacing=0.9,
+        handlelength=1.3,
+        handletextpad=0.3,
+        columnspacing=0.7,
     )
     fig.text(
         0.80,
-        0.48,
-        PANEL_D_XLABEL,
+        0.49,
+        "Metric value",
         fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
         ha="center",
         va="top",
@@ -1858,18 +2080,16 @@ def _umap_limits(frame: pd.DataFrame) -> tuple[tuple[float, float], tuple[float,
 
 def _draw_panel_e_full(fig: plt.Figure, panel_e: pd.DataFrame) -> None:
     fig.text(0.012, 0.46, "E", fontsize=10, fontweight="bold", ha="left", va="top")
-    x_positions = np.linspace(0.105, 0.87, len(PANEL_E_MAPS))
-    y_positions = (0.385, 0.325)
-    width = 0.11
-    height = 0.05
+    x_positions = np.linspace(0.070, 0.860, len(PANEL_E_MAPS))
+    y_positions = (0.360, 0.275)
+    width = 0.128
+    height = 0.075
     for row, endpoint in enumerate(ENDPOINTS):
         endpoint_data = panel_e.loc[panel_e["held_out_label"].eq(endpoint)]
         truth_rows = endpoint_data.loc[endpoint_data["map_id"].eq("truth")]
         xlim, ylim = _umap_limits(truth_rows)
         for column, (map_id, _, display) in enumerate(PANEL_E_MAPS):
-            axis = fig.add_axes(
-                (float(x_positions[column]), y_positions[row], width, height)
-            )
+            axis = fig.add_axes((float(x_positions[column]), y_positions[row], width, height))
             frame = endpoint_data.loc[endpoint_data["map_id"].eq(map_id)]
             outside = frame.loc[~frame["is_within_cdc2"]]
             eligible = frame.loc[frame["is_within_cdc2"] & ~frame["is_selected"]]
@@ -1892,9 +2112,7 @@ def _draw_panel_e_full(fig: plt.Figure, panel_e: pd.DataFrame) -> None:
                 linewidth=0,
                 rasterized=True,
             )
-            highlight = (
-                PANEL_E_TRUTH_COLOR if map_id == "truth" else METHOD_COLORS[map_id]
-            )
+            highlight = PANEL_E_TRUTH_COLOR if map_id == "truth" else METHOD_COLORS[map_id]
             axis.scatter(
                 selected["umap_1"],
                 selected["umap_2"],
@@ -1910,17 +2128,18 @@ def _draw_panel_e_full(fig: plt.Figure, panel_e: pd.DataFrame) -> None:
                 spine.set_visible(False)
             if row == 0:
                 axis.set_title(display, fontsize=MAIN_FIGURE_MIN_FONT_SIZE, pad=2)
-        endpoint_label = "HLA-DRhi\ncDC2" if row == 0 else "ISG+\ncDC2"
+        endpoint_label = "HLA-DRhi cDC2" if row == 0 else "ISG+ cDC2"
         fig.text(
-            0.095,
+            0.032,
             y_positions[row] + height / 2,
             endpoint_label,
             fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
-            fontweight="bold",
-            linespacing=0.9,
-            ha="right",
+            fontweight="normal",
+            ha="center",
             va="center",
+            rotation=270,
             color=INK,
+            gid=f"panel-e-endpoint-{row}",
         )
     method_color_handle = tuple(
         Line2D(
@@ -1929,7 +2148,8 @@ def _draw_panel_e_full(fig: plt.Figure, panel_e: pd.DataFrame) -> None:
             marker="o",
             linestyle="",
             markerfacecolor=METHOD_COLORS[method],
-            markeredgecolor="none",
+            markeredgecolor="white",
+            markeredgewidth=0.45,
             markersize=3.5,
         )
         for method, _, _ in PANEL_B_METHODS
@@ -1942,9 +2162,10 @@ def _draw_panel_e_full(fig: plt.Figure, panel_e: pd.DataFrame) -> None:
                 marker="o",
                 linestyle="",
                 markerfacecolor=PANEL_E_TRUTH_COLOR,
-                markeredgecolor="none",
+                markeredgecolor="white",
+                markeredgewidth=0.55,
                 markersize=3.5,
-                label="Held-out truth",
+                label="Reference-omitted cells",
             ),
             method_color_handle,
             Line2D(
@@ -1953,9 +2174,10 @@ def _draw_panel_e_full(fig: plt.Figure, panel_e: pd.DataFrame) -> None:
                 marker="o",
                 linestyle="",
                 markerfacecolor=PANEL_E_ELIGIBLE_GRAY,
-                markeredgecolor="none",
+                markeredgecolor="white",
+                markeredgewidth=0.55,
                 markersize=3.5,
-                label="Other cDC2",
+                label="Other ranking-cohort cells",
             ),
             Line2D(
                 [0],
@@ -1963,53 +2185,49 @@ def _draw_panel_e_full(fig: plt.Figure, panel_e: pd.DataFrame) -> None:
                 marker="o",
                 linestyle="",
                 markerfacecolor=PANEL_E_CONTEXT_GRAY,
-                markeredgecolor="none",
+                markeredgecolor="white",
+                markeredgewidth=0.55,
                 markersize=3.5,
-                label="Outside cDC2 cohort",
+                label="Outside ranking cohort",
             ),
         ],
         labels=[
-            "Held-out truth",
-            "Method-specific top-ranked sets",
-            "Other cDC2",
-            "Outside cDC2 cohort",
+            PANEL_E_LEGEND_LABELS[0],
+            PANEL_E_LEGEND_LABELS[1],
+            PANEL_E_LEGEND_LABELS[2],
+            PANEL_E_LEGEND_LABELS[3],
         ],
         handler_map={tuple: HandlerTuple(ndivide=None, pad=0.15)},
         loc="lower center",
         ncol=4,
         frameon=False,
-        bbox_to_anchor=(0.535, 0.285),
+        bbox_to_anchor=(0.50, 0.247),
         fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
-        handlelength=4.0,
-        handletextpad=0.3,
-        columnspacing=0.8,
+        handlelength=3.6,
+        handletextpad=0.35,
+        labelspacing=0.35,
+        columnspacing=0.5,
     )
 
 
 def _draw_panel_f_full(fig: plt.Figure, panel_f: pd.DataFrame) -> None:
     fig.text(0.012, 0.245, "F", fontsize=10, fontweight="bold", ha="left", va="top")
-    x_positions = np.linspace(0.17, 0.805, len(PANEL_F_MAPS))
-    y_positions = (0.17, 0.11)
-    width = 0.11
-    height = 0.05
+    x_positions = np.linspace(0.070, 0.860, len(PANEL_F_MAPS))
+    y_positions = (0.145, 0.060)
+    width = 0.128
+    height = 0.075
     for row, endpoint in enumerate(ENDPOINTS):
         endpoint_data = panel_f.loc[panel_f["held_out_label"].eq(endpoint)]
         truth_rows = endpoint_data.loc[endpoint_data["map_id"].eq("truth")]
         xlim, ylim = _umap_limits(truth_rows)
         for column, (map_id, display) in enumerate(PANEL_F_MAPS):
-            axis = fig.add_axes(
-                (float(x_positions[column]), y_positions[row], width, height)
-            )
+            axis = fig.add_axes((float(x_positions[column]), y_positions[row], width, height))
             frame = endpoint_data.loc[endpoint_data["map_id"].eq(map_id)]
-            represented = frame.loc[frame["is_represented_state"]].sort_values(
-                "cell_id"
-            )
+            represented = frame.loc[frame["is_represented_state"]].sort_values("cell_id")
             held_out = frame.loc[frame["is_held_out_state"]].sort_values("cell_id")
             colors = represented["displayed_assignment"].map(PANEL_F_LABEL_COLORS)
             if colors.isna().any():
-                raise HIHAFigure2Error(
-                    "Composite Panel F contains unmapped biological labels"
-                )
+                raise HIHAFigure2Error("Composite Panel F contains unmapped biological labels")
             axis.scatter(
                 represented["umap_1"],
                 represented["umap_2"],
@@ -2036,17 +2254,18 @@ def _draw_panel_f_full(fig: plt.Figure, panel_f: pd.DataFrame) -> None:
                 spine.set_visible(False)
             if row == 0:
                 axis.set_title(display, fontsize=MAIN_FIGURE_MIN_FONT_SIZE, pad=2)
-        endpoint_label = "HLA-DRhi\ncDC2" if row == 0 else "ISG+\ncDC2"
+        endpoint_label = "HLA-DRhi cDC2" if row == 0 else "ISG+ cDC2"
         fig.text(
-            0.15,
+            0.032,
             y_positions[row] + height / 2,
             endpoint_label,
             fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
-            fontweight="bold",
-            linespacing=0.9,
-            ha="right",
+            fontweight="normal",
+            ha="center",
             va="center",
+            rotation=270,
             color=INK,
+            gid=f"panel-f-endpoint-{row}",
         )
     handles = [
         Line2D(
@@ -2070,7 +2289,7 @@ def _draw_panel_f_full(fig: plt.Figure, panel_f: pd.DataFrame) -> None:
             markerfacecolor=PANEL_F_HELD_OUT_COLOR,
             markeredgecolor="none",
             markersize=3.5,
-            label="Held-out state (not evaluated)",
+            label="Reference-omitted cells (not evaluated)",
         )
     )
     fig.legend(
@@ -2078,7 +2297,7 @@ def _draw_panel_f_full(fig: plt.Figure, panel_f: pd.DataFrame) -> None:
         loc="lower center",
         ncol=7,
         frameon=False,
-        bbox_to_anchor=(0.535, 0.055),
+        bbox_to_anchor=(0.535, 0.010),
         fontsize=MAIN_FIGURE_MIN_FONT_SIZE,
         handletextpad=0.25,
         columnspacing=0.65,
@@ -2096,12 +2315,94 @@ def _draw_main_figure(
 ) -> plt.Figure:
     fig = plt.figure(figsize=MAIN_FIGURE_SIZE_INCHES, facecolor="white")
     _draw_panel_a_narrow(fig, design)
-    _draw_panel_b_wide(fig, panel_b)
-    _draw_panel_c_half(fig, panel_c_summary, panel_c_restoration)
-    _draw_panel_d_half(fig, panel_d)
+    _draw_panel_b_restoration(fig, panel_c_summary, panel_c_restoration)
+    _draw_panel_c_metric_bars(fig, panel_b)
+    _draw_panel_d_metric_bars(fig, panel_d)
     _draw_panel_e_full(fig, panel_e)
     _draw_panel_f_full(fig, panel_f)
     return fig
+
+
+def _draw_panel_figure(sources: tuple[object, ...], letter: str) -> plt.Figure:
+    (
+        design,
+        panel_b,
+        panel_c_summary,
+        panel_c_restoration,
+        panel_d,
+        panel_e,
+        panel_f,
+    ) = sources
+    drawers = {
+        "A": lambda fig: _draw_panel_a_narrow(fig, design),
+        "B": lambda fig: _draw_panel_b_restoration(
+            fig, panel_c_summary, panel_c_restoration
+        ),
+        "C": lambda fig: _draw_panel_c_metric_bars(fig, panel_b),
+        "D": lambda fig: _draw_panel_d_metric_bars(fig, panel_d),
+        "E": lambda fig: _draw_panel_e_full(fig, panel_e),
+        "F": lambda fig: _draw_panel_f_full(fig, panel_f),
+    }
+    if letter not in drawers:
+        raise HIHAFigure2Error(f"Unknown Figure 2 panel: {letter}")
+    fig = plt.figure(figsize=MAIN_FIGURE_SIZE_INCHES, facecolor="white")
+    drawers[letter](fig)
+    return fig
+
+
+def _panel_crop_bbox_inches(fig: plt.Figure, *, padding_inches: float = 0.04):
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    boxes = [
+        axis.get_tightbbox(renderer)
+        for axis in fig.axes
+        if axis.get_visible() and axis.get_tightbbox(renderer) is not None
+    ]
+    boxes.extend(
+        text.get_window_extent(renderer)
+        for text in fig.findobj(match=Text)
+        if text.get_visible() and text.get_text()
+    )
+    boxes.extend(legend.get_window_extent(renderer) for legend in fig.legends)
+    if not boxes:
+        raise HIHAFigure2Error("Cannot crop a Figure 2 panel without visible artists")
+    return Bbox.union(boxes).transformed(fig.dpi_scale_trans.inverted()).padded(padding_inches)
+
+
+def generate_panel_images(
+    *,
+    letters: Iterable[str] = MAIN_FIGURE_PANEL_SET,
+    panel_root: Path = PANEL_ROOT,
+    source_root: Path = SOURCE_DATA_ROOT,
+    artifact_prefix: str = "panel",
+) -> dict[str, Path]:
+    sources = _read_composite_sources(source_root)
+    outputs: dict[str, Path] = {}
+    for raw_letter in letters:
+        letter = raw_letter.upper()
+        fig = _draw_panel_figure(sources, letter)
+        _validate_main_figure_fonts(fig)
+        crop = _panel_crop_bbox_inches(fig)
+        panel_outputs = {
+            suffix: panel_root / f"{artifact_prefix}_{letter.lower()}.{suffix}"
+            for suffix in ("png", "pdf", "tiff")
+        }
+        legacy_svg = panel_root / f"{artifact_prefix}_{letter.lower()}.svg"
+        if legacy_svg.is_file():
+            legacy_svg.unlink()
+        for suffix, path in panel_outputs.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            save_kwargs = {
+                "dpi": PANEL_RASTER_DPI if suffix in {"png", "tiff"} else None,
+                "facecolor": "white",
+                "bbox_inches": crop,
+            }
+            if suffix == "tiff":
+                save_kwargs["pil_kwargs"] = {"compression": "tiff_lzw"}
+            fig.savefig(path, **save_kwargs)
+        outputs[f"panel_{letter.lower()}"] = panel_outputs["png"]
+        plt.close(fig)
+    return outputs
 
 
 def _validate_main_figure_fonts(fig: plt.Figure) -> None:
@@ -2109,6 +2410,8 @@ def _validate_main_figure_fonts(fig: plt.Figure) -> None:
         float(text.get_fontsize())
         for text in fig.findobj(match=Text)
         if text.get_text()
+        and text.get_gid() not in PANEL_A_SMALL_TEXT_GIDS
+        and text.get_gid() not in PANEL_B_ENDPOINT_GIDS
     ]
     if not font_sizes or min(font_sizes) < MAIN_FIGURE_MIN_FONT_SIZE:
         minimum = min(font_sizes) if font_sizes else None
@@ -2138,6 +2441,7 @@ def generate_main_figure(
     docs_root: Path = DOCS_ROOT,
     result_root: Path = RESULT_ROOT,
     source_root: Path = SOURCE_DATA_ROOT,
+    project_root: Path | None = None,
 ) -> dict[str, Path]:
     (
         design,
@@ -2155,12 +2459,17 @@ def generate_main_figure(
     docs_figure_root.mkdir(parents=True, exist_ok=True)
     outputs = {
         suffix: docs_figure_root / f"manuscript_fig_hiha_main.{suffix}"
-        for suffix in ("png", "pdf", "svg")
+        for suffix in ("png", "pdf", "tiff")
     }
     result_outputs = {
-        suffix: result_root / f"main_figure.{suffix}"
-        for suffix in ("png", "pdf", "svg")
+        suffix: result_root / f"main_figure.{suffix}" for suffix in ("png", "pdf", "tiff")
     }
+    for legacy_svg in (
+        docs_figure_root / "manuscript_fig_hiha_main.svg",
+        result_root / "main_figure.svg",
+    ):
+        if legacy_svg.is_file():
+            legacy_svg.unlink()
     manifest_path = result_root / "main_figure_manifest.yaml"
 
     fig = _draw_main_figure(
@@ -2174,16 +2483,14 @@ def generate_main_figure(
     )
     _validate_main_figure_fonts(fig)
     for suffix, path in outputs.items():
-        fig.savefig(
-            path,
-            dpi=PANEL_RASTER_DPI if suffix == "png" else None,
-            facecolor="white",
-        )
-        fig.savefig(
-            result_outputs[suffix],
-            dpi=PANEL_RASTER_DPI if suffix == "png" else None,
-            facecolor="white",
-        )
+        save_kwargs = {
+            "dpi": PANEL_RASTER_DPI if suffix in {"png", "tiff"} else None,
+            "facecolor": "white",
+        }
+        if suffix == "tiff":
+            save_kwargs["pil_kwargs"] = {"compression": "tiff_lzw"}
+        fig.savefig(path, **save_kwargs)
+        fig.savefig(result_outputs[suffix], **save_kwargs)
     plt.close(fig)
 
     source_paths = [
@@ -2191,9 +2498,35 @@ def generate_main_figure(
         source_root / "panel_b_detection.csv",
         source_root / "panel_c_deficit_by_seed.csv",
         source_root / "panel_c_restoration_by_seed.csv",
-        source_root / "panel_d_label_transfer.csv",
-        source_root / "panel_e_umap_cells.csv",
+        _resolve_source_path(
+            source_root,
+            "panel_d_label_transfer.csv",
+            "panel_e_label_transfer.csv",
+        ),
+        _resolve_source_path(
+            source_root,
+            "panel_e_umap_cells.csv",
+            "panel_d_umap_cells.csv",
+        ),
         source_root / "panel_f_label_assignment_cells.csv",
+    ]
+    manifest_root = project_root.resolve() if project_root is not None else None
+
+    def manifest_path_value(path: Path) -> str:
+        if manifest_root is None:
+            return str(path)
+        try:
+            return str(path.resolve().relative_to(manifest_root))
+        except ValueError as error:
+            raise HIHAFigure2Error(
+                f"Canonical manifest path is outside the repository: {path}"
+            ) from error
+
+    deterministic_outputs = [
+        path
+        for output_group in (outputs, result_outputs)
+        for suffix, path in output_group.items()
+        if suffix in {"png", "tiff"}
     ]
     manifest_path.write_text(
         yaml.safe_dump(
@@ -2201,25 +2534,93 @@ def generate_main_figure(
                 "stage": "manuscript-figure",
                 "figure": "HIHA controlled missing-state Figure 2",
                 "panel_set": list(MAIN_FIGURE_PANEL_SET),
+                "panel_contract": {
+                    "B": "paired_reference_restoration_response",
+                    "C": "within_cdc2_omitted_state_ranking",
+                    "D": "represented_state_label_transfer",
+                },
                 "panel_d_disposition": "main_figure_panel",
                 "panel_e_disposition": "main_figure_panel",
                 "panel_f_disposition": "main_figure_panel",
                 "generator": (
-                    "experiments/missing_celltype/"
-                    "generate_hiha_dc_figure2_panels.py --panel main"
+                    "experiments/missing_celltype/generate_hiha_dc_figure2_panels.py --panel main"
                 ),
-                "artifacts": {suffix: str(path) for suffix, path in outputs.items()},
-                "result_artifacts": {
-                    suffix: str(path) for suffix, path in result_outputs.items()
+                "artifacts": {
+                    suffix: manifest_path_value(path) for suffix, path in outputs.items()
                 },
-                "sources": [str(path) for path in source_paths],
+                "result_artifacts": {
+                    suffix: manifest_path_value(path) for suffix, path in result_outputs.items()
+                },
+                "sources": [manifest_path_value(path) for path in source_paths],
+                "source_data_sha256": {
+                    manifest_path_value(path): _file_sha256(path) for path in source_paths
+                },
+                "output_sha256": {
+                    manifest_path_value(path): _file_sha256(path) for path in deterministic_outputs
+                },
+                "container_metadata_policy": {
+                    "authoritative_hashed_formats": ["png", "tiff"],
+                    "pdf_hashes_recorded": False,
+                    "pdf_reason": (
+                        "PDF container timestamps may vary; PDF is an untracked "
+                        "delivery format and is excluded from deterministic identity."
+                    ),
+                },
                 "parameters": {
                     "canvas_inches": list(MAIN_FIGURE_SIZE_INCHES),
                     "canvas_millimeters": [178, 230],
                     "raster_dpi": PANEL_RASTER_DPI,
-                    "minimum_font_size_points": MAIN_FIGURE_MIN_FONT_SIZE,
+                    "minimum_font_size_points": PANEL_A_MIN_FONT_SIZE,
+                    "standard_minimum_font_size_points": MAIN_FIGURE_MIN_FONT_SIZE,
+                    "panel_a_condition_font_size_points": (PANEL_A_CONDITION_FONT_SIZE),
+                    "panel_b_endpoint_label_alignment": "right_edge_rotated_270",
+                    "panel_b_endpoint_font_size_points": PANEL_B_ENDPOINT_FONT_SIZE,
+                    "panel_b_axis_bounds_fraction": [0.54, 0.82, 0.37, 0.135],
+                    "panel_b_encoding": {
+                        "rows": [
+                            "reference_omitted_cell_median_deficit_decrease",
+                            "represented_control_median_deficit_decrease",
+                            "control_adjusted_median_deficit_decrease",
+                            "median_restored_state_destination_fraction",
+                        ],
+                        "bar": "arithmetic_mean_across_five_donor_splits",
+                        "whisker": "sample_sd_ddof1",
+                        "points": "not_rendered",
+                        "axis": [0.0, 1.0],
+                        "axis_label": "Metric value",
+                    },
                     "panel_e_representative_seed": REPRESENTATIVE_SEED,
+                    "panel_e_legend_columns": 4,
                     "panel_f_representative_seed": REPRESENTATIVE_SEED,
+                    "spatial_panel_layout": {
+                        "panels": ["E", "F"],
+                        "method_columns": "aligned",
+                        "axis_width_fraction": 0.128,
+                        "axis_height_fraction": 0.075,
+                        "endpoint_labels": "left_border_rotated_270",
+                        "endpoint_label_weight": "normal",
+                    },
+                    "method_label_layout": {
+                        "panels": ["C", "D"],
+                        "scmap_cluster_lines": 2,
+                    },
+                    "panel_c_encoding": {
+                        "solid": "average_precision",
+                        "hollow": "auroc",
+                        "reference": "mean_positive_prevalence",
+                        "bar": "arithmetic_mean_across_five_donor_splits",
+                        "whisker": "sample_sd_ddof1",
+                        "points": "not_rendered",
+                        "axis": [0.0, 1.0],
+                    },
+                    "panel_d_encoding": {
+                        "solid": "forced_accuracy",
+                        "hollow": "forced_macro_f1",
+                        "bar": "arithmetic_mean_across_five_donor_splits",
+                        "whisker": "sample_sd_ddof1",
+                        "points": "not_rendered",
+                        "axis": [0.0, 1.0],
+                    },
                     "dense_umap_points_rasterized_in_vector_outputs": True,
                 },
             },

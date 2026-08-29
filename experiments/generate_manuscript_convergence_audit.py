@@ -12,6 +12,9 @@ import yaml
 EVIDENCE_VERIFIED_CONVERGED = "verified_converged"
 EVIDENCE_VERIFIED_NONCONVERGED = "verified_nonconverged"
 EVIDENCE_RECORD_UNAVAILABLE = "per_fit_convergence_record_unavailable"
+SETTINGS_FIT_METHOD_PARAMS = "fit_method_params"
+SETTINGS_RETAINED_PER_FIT_TABLE = "retained_per_fit_table"
+SETTINGS_CONFIGURED_ONLY = "configured_only_fit_records_unavailable"
 
 HIHA_HLA_PARAMETER_INDEX = Path(
     "results/HIHA_DC/sensitivity/full_tau_target2_alpha2_hla/tables/"
@@ -24,6 +27,31 @@ AUXILIARY_INDEX_INPUTS = (
     HIHA_HLA_PARAMETER_INDEX,
     HIHA_PARAMETER_FIGURE_MANIFEST,
 )
+RETIRED_FIT_FAMILIES = (
+    {
+        "experiment": "HIHA DC",
+        "analysis_family": "constant-tau compatibility sensitivity",
+        "historical_source": (
+            "results/HIHA_DC/sensitivity/constant_tau_alpha/tables/"
+            "detection_by_run.csv"
+        ),
+        "reason": (
+            "The historical broad grid is not an input to an active manuscript "
+            "claim, display, Supplementary Data 2 member, or release unit."
+        ),
+    },
+    {
+        "experiment": "Mouse spleen",
+        "analysis_family": "prior-risk diagnostic",
+        "historical_source": (
+            "results/mouse_spleen_core_ot/manuscript/prior_dependence/"
+        ),
+        "reason": (
+            "The mouse prior-dependence unit is outside the current supplement "
+            "hierarchy and is not an active manuscript claim or display."
+        ),
+    },
+)
 
 RETAINED_FIT_FAMILIES = (
     {
@@ -31,9 +59,8 @@ RETAINED_FIT_FAMILIES = (
         "analysis_family": "selected comparison",
         "manuscript_scope": (
             "S2.3 selected ranking and represented-state forced-transfer "
-            "comparisons; S2.4 matched full-reference response; S2.5.3 "
-            "selected-fit calibration; S2.5.4 selected-fit prior-dependence "
-            "diagnostic"
+            "comparisons; S2.4 paired reference-restoration response; S2.5 "
+            "operational abstention and calibration sensitivity"
         ),
         "convergence_evidence_source": (
             "runs/hiha_dc_*/transport/*/hiha_harmony30_k100/*/"
@@ -44,9 +71,9 @@ RETAINED_FIT_FAMILIES = (
         "experiment": "HIHA DC",
         "analysis_family": "component-ablation surface",
         "manuscript_scope": (
-            "S2.5.1 manuscript-facing compatibility-sensitivity surface; "
+            "S2.6.1 manuscript-facing compatibility-sensitivity surface; "
             "supporting component-sensitivity fits retained in Supplementary "
-            "Data 3"
+            "Data 2"
         ),
         "convergence_evidence_source": (
             "results/HIHA_DC/sensitivity/component_ablation/tables/"
@@ -58,7 +85,7 @@ RETAINED_FIT_FAMILIES = (
         "analysis_family": "compatibility-weight mean-matched attribution",
         "manuscript_scope": (
             "Supporting across-alpha mean-matched attribution associated with "
-            "S2.5.2 and retained in Supplementary Data 3; not the "
+            "S2.6.2 and retained in Supplementary Data 2; not the "
             "manuscript-facing fixed-alpha-zero surface"
         ),
         "convergence_evidence_source": (
@@ -70,7 +97,7 @@ RETAINED_FIT_FAMILIES = (
         "experiment": "HIHA DC",
         "analysis_family": "fixed-alpha-zero matchability surface",
         "manuscript_scope": (
-            "S2.5.2 fixed-alpha-zero mean-matched matchability-penalty "
+            "S2.6.2 fixed-alpha-zero mean-matched matchability-penalty "
             "attribution"
         ),
         "convergence_evidence_source": (
@@ -81,21 +108,8 @@ RETAINED_FIT_FAMILIES = (
     },
     {
         "experiment": "HIHA DC",
-        "analysis_family": "constant-tau compatibility sensitivity",
-        "manuscript_scope": (
-            "Supporting constant-tau compatibility-sensitivity analysis for "
-            "S2.5.1 retained in Supplementary Data 3; not a separate "
-            "manuscript-facing display"
-        ),
-        "convergence_evidence_source": (
-            "results/HIHA_DC/sensitivity/constant_tau_alpha/tables/"
-            "detection_by_run.csv"
-        ),
-    },
-    {
-        "experiment": "HIHA DC",
         "analysis_family": "query-penalty sensitivity",
-        "manuscript_scope": "S2.5.3 query-penalty parameter sensitivity",
+        "manuscript_scope": "S2.6.3 query-penalty parameter sensitivity",
         "convergence_evidence_source": (
             "results/HIHA_DC/figures/"
             "hiha_parameter_sensitivity_manifest.yaml; "
@@ -111,8 +125,9 @@ RETAINED_FIT_FAMILIES = (
         "analysis_family": "parameter sensitivity",
         "manuscript_scope": (
             "S3.2 selected CoRe-OT operating points; S3.3 selected CoRe-OT "
-            "results; S3.4 matched full-reference response; S3.5.3 CoRe-OT "
-            "parameter and calibration sensitivity; S3.5.4 selected-fit "
+            "results; S3.4 paired reference-restoration response; S3.5 "
+            "operational abstention and calibration sensitivity; S3.6.3 "
+            "query-penalty sensitivity; S3.6.4 selected-fit "
             "prior-dependence diagnostic"
         ),
         "convergence_evidence_source": (
@@ -125,7 +140,7 @@ RETAINED_FIT_FAMILIES = (
         "experiment": "PBMC",
         "analysis_family": "selected comparison",
         "manuscript_scope": (
-            "S3.3 selected match-only and Uniform UOT comparisons; S3.5.3 "
+            "S3.3 selected match-only and Uniform UOT comparisons; S3.5 "
             "Uniform UOT calibration sensitivity"
         ),
         "convergence_evidence_source": (
@@ -137,9 +152,9 @@ RETAINED_FIT_FAMILIES = (
         "experiment": "PBMC",
         "analysis_family": "component-ablation surface",
         "manuscript_scope": (
-            "S3.5.1 manuscript-facing constant-tau compatibility-sensitivity "
+            "S3.6.1 manuscript-facing constant-tau compatibility-sensitivity "
             "surface; supporting alpha-zero penalty-sensitivity fits retained "
-            "in Supplementary Data 4"
+            "in Supplementary Data 3"
         ),
         "convergence_evidence_source": (
             "results/PBMC/sensitivity/component_ablation/tables/"
@@ -150,7 +165,7 @@ RETAINED_FIT_FAMILIES = (
         "experiment": "PBMC",
         "analysis_family": "fixed-alpha-zero matchability surface",
         "manuscript_scope": (
-            "S3.5.2 fixed-alpha-zero mean-matched matchability-penalty "
+            "S3.6.2 fixed-alpha-zero mean-matched matchability-penalty "
             "attribution"
         ),
         "convergence_evidence_source": (
@@ -164,7 +179,7 @@ RETAINED_FIT_FAMILIES = (
         "analysis_family": "compatibility-weight mean-matched attribution",
         "manuscript_scope": (
             "Supporting across-alpha mean-matched attribution associated with "
-            "S3.5.2 and retained in Supplementary Data 4; not the "
+            "S3.6.2 and retained in Supplementary Data 3; not the "
             "manuscript-facing fixed-alpha-zero surface"
         ),
         "convergence_evidence_source": (
@@ -178,8 +193,7 @@ RETAINED_FIT_FAMILIES = (
         "manuscript_scope": (
             "S4.2 selected operating point; S4.3 selected transport "
             "comparisons; S4.4 selected-fit destination and "
-            "transported-support summaries; S4.5.4 selected-fit "
-            "prior-dependence diagnostic"
+            "transported-support summaries"
         ),
         "convergence_evidence_source": (
             "results/mouse_spleen_core_ot/runs/"
@@ -207,7 +221,7 @@ RETAINED_FIT_FAMILIES = (
         "convergence_evidence_source": (
             "results/mouse_spleen_core_ot/natural_mismatch/sensitivity/"
             "rho_attribution_tau_alpha_search/tables/"
-            "rho_tau_surface_alpha5_range025_4.csv"
+            "coarse_by_dataset.csv"
         ),
     },
     {
@@ -245,7 +259,7 @@ def _manifest_row(
     tol: float,
     runs_root: Path = Path("runs"),
 ) -> dict[str, object]:
-    manifest_path = (
+    fit_directory = (
         project_root
         / runs_root
         / run_id
@@ -253,9 +267,12 @@ def _manifest_row(
         / condition
         / candidate_set
         / method
-        / "transport_manifest.yaml"
     )
-    if not manifest_path.is_file():
+    manifest_path = fit_directory / "transport_manifest.yaml"
+    method_params_path = fit_directory / "method_params.yaml"
+    manifest_available = manifest_path.is_file()
+    method_params_available = method_params_path.is_file()
+    if not manifest_available and not method_params_available:
         return {
             "experiment": experiment,
             "analysis_family": analysis_family,
@@ -270,11 +287,49 @@ def _manifest_row(
             "max_iter": max_iter,
             "tol": tol,
             "source_artifact": "",
+            "solver_settings_evidence": SETTINGS_CONFIGURED_ONLY,
+            "method_params_artifact": "",
         }
+    if manifest_available != method_params_available:
+        raise ValueError(
+            "Transport fit has an incomplete manifest/method-parameter pair: "
+            f"{fit_directory}"
+        )
     manifest = _read_yaml(manifest_path)
     metadata = manifest.get("metadata")
     if not isinstance(metadata, dict):
         raise ValueError(f"Transport manifest omits metadata: {manifest_path}")
+    manifest_method = str(metadata.get("method", ""))
+    if manifest_method != method:
+        raise ValueError(
+            f"Transport manifest method mismatch at {manifest_path}: "
+            f"expected {method}, found {manifest_method or '<missing>'}"
+        )
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict) or not artifacts.get("method_params"):
+        raise ValueError(
+            f"Transport manifest omits its method-parameter artifact: {manifest_path}"
+        )
+    recorded_method_params = Path(str(artifacts["method_params"]))
+    if not recorded_method_params.is_absolute():
+        recorded_method_params = project_root / recorded_method_params
+    if recorded_method_params.resolve() != method_params_path.resolve():
+        raise ValueError(
+            "Transport manifest and method parameters do not resolve to the same "
+            f"fit directory: {manifest_path} records {recorded_method_params}, "
+            f"expected {method_params_path}"
+        )
+    method_params = _read_yaml(method_params_path)
+    params_method = str(method_params.get("name", ""))
+    if params_method != method:
+        raise ValueError(
+            f"Method-parameter identity mismatch at {method_params_path}: "
+            f"expected {method}, found {params_method or '<missing>'}"
+        )
+    if "max_iter" not in method_params or "tol" not in method_params:
+        raise ValueError(
+            f"Method parameters omit max_iter or tol: {method_params_path}"
+        )
     converged = bool(metadata["converged"])
     return {
         "experiment": experiment,
@@ -291,9 +346,13 @@ def _manifest_row(
         ),
         "converged": converged,
         "n_iter": int(metadata["n_iter"]),
-        "max_iter": max_iter,
-        "tol": tol,
+        "max_iter": int(method_params["max_iter"]),
+        "tol": float(method_params["tol"]),
         "source_artifact": str(manifest_path.relative_to(project_root)),
+        "solver_settings_evidence": SETTINGS_FIT_METHOD_PARAMS,
+        "method_params_artifact": str(
+            method_params_path.relative_to(project_root)
+        ),
     }
 
 
@@ -330,6 +389,8 @@ def _recorded_row(
         "max_iter": max_iter,
         "tol": tol,
         "source_artifact": str(source_artifact),
+        "solver_settings_evidence": SETTINGS_RETAINED_PER_FIT_TABLE,
+        "method_params_artifact": "",
     }
 
 
@@ -559,40 +620,76 @@ def _mouse_rows(project_root: Path) -> list[dict[str, object]]:
                         else 1.0e-6
                     ),
                     "source_artifact": str(relative_path),
+                    "solver_settings_evidence": SETTINGS_RETAINED_PER_FIT_TABLE,
+                    "method_params_artifact": "",
                 }
             )
 
-    rows.extend(
-        _paired_fit_table_rows(
-            project_root=project_root,
-            relative_path=Path(
-                "results/mouse_spleen_core_ot/natural_mismatch/sensitivity/"
-                "rho_attribution_tau_alpha_search/tables/"
-                "rho_tau_surface_alpha5_range025_4.csv"
-            ),
-            experiment="Mouse spleen",
-            analysis_family="fixed-alpha-five matchability surface",
-            condition="natural_mismatch",
-            parameter_columns=("alpha", "tau_min", "tau_max"),
-            max_iter_default=5000,
-            tol_default=1.0e-6,
-            endpoint_default="Proliferating",
-            seed_default=0,
-            run_id_default="mouse_spleen_natural_proliferating",
-            pair_specs=(
-                (
-                    "heterogeneous_query_penalty",
-                    "all_heterogeneous_converged",
-                    None,
-                ),
-                (
-                    "mean_matched_uniform_query_penalty",
-                    "all_uniform_converged",
-                    None,
-                ),
-            ),
+    surface_path = Path(
+        "results/mouse_spleen_core_ot/natural_mismatch/sensitivity/"
+        "rho_attribution_tau_alpha_search/tables/"
+        "rho_tau_surface_alpha5_range025_4.csv"
+    )
+    fit_table_path = Path(
+        "results/mouse_spleen_core_ot/natural_mismatch/sensitivity/"
+        "rho_attribution_tau_alpha_search/tables/coarse_by_dataset.csv"
+    )
+    surface = pd.read_csv(project_root / surface_path)
+    fit_table = pd.read_csv(project_root / fit_table_path)
+    parameter_columns = ("alpha", "tau_min", "tau_max")
+    surface_keys = set(
+        surface.loc[:, list(parameter_columns)].itertuples(index=False, name=None)
+    )
+    retained_fits = fit_table.loc[
+        fit_table.loc[:, list(parameter_columns)].apply(tuple, axis=1).isin(surface_keys)
+    ]
+    retained_keys = set(
+        retained_fits.loc[:, list(parameter_columns)].itertuples(
+            index=False, name=None
         )
     )
+    if (
+        len(surface_keys) != 15
+        or retained_keys != surface_keys
+        or len(retained_fits) != 15
+        or retained_fits.duplicated(list(parameter_columns)).any()
+    ):
+        raise ValueError(
+            "The retained mouse-spleen alpha-five surface does not map one-to-one "
+            "to detailed convergence rows."
+        )
+    for _, item in retained_fits.iterrows():
+        parameterized_run = _parameterized_run_id(
+            str(item["run_id"]), item, parameter_columns
+        )
+        for method, converged_column, iteration_column in (
+            (
+                "heterogeneous_query_penalty",
+                "heterogeneous_converged",
+                "heterogeneous_n_iterations",
+            ),
+            (
+                "mean_matched_uniform_query_penalty",
+                "uniform_converged",
+                "uniform_n_iterations",
+            ),
+        ):
+            rows.append(
+                _recorded_row(
+                    experiment="Mouse spleen",
+                    analysis_family="fixed-alpha-five matchability surface",
+                    endpoint=str(item["endpoint"]),
+                    seed=int(item["seed"]),
+                    condition="natural_mismatch",
+                    run_id=parameterized_run,
+                    method=method,
+                    converged=bool(item[converged_column]),
+                    n_iter=int(item[iteration_column]),
+                    max_iter=int(item["max_iterations"]),
+                    tol=float(item["tolerance"]),
+                    source_artifact=fit_table_path,
+                )
+            )
 
     parameter_path = Path(
         "results/mouse_spleen_core_ot/natural_mismatch/sensitivity/"
@@ -784,29 +881,6 @@ def _hiha_rows(project_root: Path) -> list[dict[str, object]]:
             )
         )
 
-    sensitivity_path = Path(
-        "results/HIHA_DC/sensitivity/constant_tau_alpha/tables/"
-        "detection_by_run.csv"
-    )
-    sensitivity = pd.read_csv(project_root / sensitivity_path)
-    for _, item in sensitivity.iterrows():
-        rows.append(
-            _manifest_row(
-                project_root=project_root,
-                experiment="HIHA DC",
-                analysis_family="constant-tau compatibility sensitivity",
-                endpoint=str(item["held_out_label"]),
-                seed=int(item["seed"]),
-                condition=str(item["condition_id"]),
-                run_id=str(item["run_id"]),
-                candidate_set=str(item["candidate_set"]),
-                method=str(item["method"]),
-                max_iter=2000,
-                tol=1.0e-6,
-            )
-        )
-        if not rows[-1]["source_artifact"]:
-            rows[-1]["source_artifact"] = str(sensitivity_path)
     return rows
 
 
@@ -1092,6 +1166,22 @@ def generate_audit(
                         "convergence record is unavailable"
                     ),
                 },
+                "solver_settings_policy": {
+                    SETTINGS_FIT_METHOD_PARAMS: (
+                        "max_iter and tol are read from the method_params.yaml "
+                        "declared by the same fit's transport manifest"
+                    ),
+                    SETTINGS_RETAINED_PER_FIT_TABLE: (
+                        "max_iter and tol are recorded in the retained per-fit "
+                        "source table"
+                    ),
+                    SETTINGS_CONFIGURED_ONLY: (
+                        "fit-level manifest and method_params.yaml are both "
+                        "unavailable; max_iter and tol are configured index "
+                        "fallbacks, not observed fit evidence"
+                    ),
+                },
+                "retired_analysis_families": list(RETIRED_FIT_FAMILIES),
                 "artifacts": {
                     "by_fit": _reported_path(by_fit_path, project_root),
                     "summary": _reported_path(summary_path, project_root),

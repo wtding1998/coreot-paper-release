@@ -19,6 +19,7 @@ from experiments.rho_attribution_discovery_confirmation import (
     coarse_configurations,
     hiha_alpha0_fine_configurations,
     hiha_alpha0_focused_configurations,
+    mouse_alpha5_retained_configurations,
     refinement_configurations,
     relative_percent,
     summarize_surface,
@@ -123,6 +124,139 @@ def test_mouse_surface_retains_complete_pairs_and_resumes(
     assert calls == [pair_root, pair_root]
 
 
+def test_hiha_alpha0_surface_retains_complete_pairs_and_reruns_incomplete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    analysis_root = tmp_path / "analysis"
+    endpoint = EndpointDesign(
+        endpoint="HLA-DRhi cDC2",
+        slug="hladrhi_cdc2",
+        selected_alpha=2.0,
+        tau_target=2.0,
+    )
+    seed = 1
+    run_root = attribution._base_run_root(
+        analysis_root, endpoint, "discovery", seed
+    )
+    inputs = attribution._base_input_paths(run_root)
+    for path in inputs.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {"source_cell_id": ["q"], "target_cell_id": ["r"]}
+    ).to_parquet(inputs["candidates"], index=False)
+    pd.DataFrame({"cell_id": ["q"], "rho": [0.5]}).to_csv(
+        inputs["source_priors"], index=False
+    )
+    pd.DataFrame({"cell_id": ["r"]}).to_csv(
+        inputs["target_priors"], index=False
+    )
+    pd.DataFrame({"cell_id": ["q"]}).to_csv(inputs["truth"], index=False)
+    inputs["split"].write_text("cell_id,split_domain\nq,query\n", encoding="utf-8")
+    inputs["manifest"].write_text("stage: test\n", encoding="utf-8")
+    calls: list[Path] = []
+
+    def fake_pair(**kwargs: object) -> dict[str, object]:
+        method_root = Path(kwargs["method_root"])
+        calls.append(method_root)
+        for variant in attribution.VARIANTS:
+            variant_root = method_root / variant
+            variant_root.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame({"cell_id": ["q"]}).to_parquet(
+                variant_root / "cell_transport_scores.parquet", index=False
+            )
+            pd.DataFrame({"mass": [1.0]}).to_parquet(
+                variant_root / "sparse_coupling.parquet", index=False
+            )
+            (variant_root / "label_probabilities.npz").write_bytes(b"test")
+            (variant_root / "method_params.yaml").write_text(
+                "name: test\n", encoding="utf-8"
+            )
+            (variant_root / "transport_manifest.yaml").write_text(
+                yaml.safe_dump({"metadata": {"converged": True, "n_iter": 7}}),
+                encoding="utf-8",
+            )
+        row: dict[str, object] = {
+            "heterogeneous_converged": True,
+            "heterogeneous_n_iterations": 7,
+            "heterogeneous_runtime_seconds": 0.1,
+            "uniform_converged": True,
+            "uniform_n_iterations": 7,
+            "uniform_runtime_seconds": 0.1,
+            "evaluation_scope": "within_cdc2",
+            "n_detection": 1,
+            "n_positive": 1,
+        }
+        for metric in attribution.METRIC_NAMES:
+            row[f"heterogeneous_{metric}"] = 0.6
+            row[f"uniform_{metric}"] = 0.5
+            row[f"delta_{metric}_heterogeneous_minus_uniform"] = 0.1
+        row["relative_auprc_heterogeneous_minus_uniform_percent"] = 20.0
+        return row
+
+    monkeypatch.setattr(attribution, "_run_pair", fake_pair)
+    configuration = SurfaceConfiguration(alpha=0.0, tau_min=1.0, tau_max=2.0)
+    arguments = {
+        "analysis_root": analysis_root,
+        "design_manifest_sha256": "design",
+        "cohort": "discovery",
+        "analysis_stage": "alpha0_focused025_125",
+        "endpoint": endpoint,
+        "seed": seed,
+        "configurations": (configuration,),
+        "retain_fit_artifacts": True,
+    }
+
+    attribution._run_hiha_split(**arguments)
+
+    pair_root = (
+        analysis_root
+        / "fits/discovery/alpha0_focused025_125/hladrhi_cdc2/seed1/"
+        "alpha_0_tau_min_1_tau_max_2"
+    )
+    for variant in attribution.VARIANTS:
+        for filename in attribution.RETAINED_FIT_FILES:
+            assert (pair_root / variant / filename).is_file()
+
+    attribution._run_hiha_split(**arguments)
+    assert calls == [pair_root]
+
+    (pair_root / "mean_matched_uniform/method_params.yaml").unlink()
+    attribution._run_hiha_split(**arguments)
+    assert calls == [pair_root, pair_root]
+
+
+def test_hiha_alpha0_focused_cli_dispatches_retention_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arguments = [
+        "run-hiha-alpha0-focused",
+        "--project-root",
+        str(tmp_path),
+        "--jobs",
+        "1",
+        "--retain-fit-artifacts",
+    ]
+    parsed = attribution.build_parser().parse_args(arguments)
+    assert parsed.retain_fit_artifacts is True
+
+    calls: list[dict[str, object]] = []
+
+    def fake_run_hiha_alpha0_focused(**kwargs: object) -> tuple[Path, ...]:
+        calls.append(kwargs)
+        return ()
+
+    monkeypatch.setattr(
+        attribution, "run_hiha_alpha0_focused", fake_run_hiha_alpha0_focused
+    )
+
+    assert attribution.main(arguments) == 0
+    assert len(calls) == 1
+    assert calls[0]["jobs"] == 1
+    assert calls[0]["retain_fit_artifacts"] is True
+
+
 def test_hiha_alpha0_fine_grid_is_locked_to_small_penalty_spreads() -> None:
     configurations = hiha_alpha0_fine_configurations()
     assert len(HIHA_ALPHA0_FINE_TAU_VALUES) == 9
@@ -143,6 +277,48 @@ def test_hiha_alpha0_focused_grid_uses_quarter_step_triangle() -> None:
         configurations[-1]
         == SurfaceConfiguration(alpha=0.0, tau_min=1.25, tau_max=1.25)
     )
+
+
+def test_mouse_alpha5_retained_grid_is_exact_triangular_grid() -> None:
+    tau_values = (0.25, 0.5, 1.0, 2.0, 4.0)
+    configurations = mouse_alpha5_retained_configurations()
+
+    assert len(configurations) == 15
+    assert len(set(configurations)) == 15
+    assert {configuration.alpha for configuration in configurations} == {5.0}
+    assert {
+        (configuration.tau_min, configuration.tau_max)
+        for configuration in configurations
+    } == set(tau_pairs(tau_values))
+
+
+def test_mouse_alpha5_retained_cli_dispatches_without_running_fits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arguments = [
+        "run-mouse-retained-alpha5",
+        "--project-root",
+        str(tmp_path),
+        "--jobs",
+        "1",
+    ]
+    parsed = attribution.build_parser().parse_args(arguments)
+    assert parsed.command == "run-mouse-retained-alpha5"
+
+    calls: list[dict[str, object]] = []
+
+    def fake_run_mouse_coarse(**kwargs: object) -> tuple[Path, Path]:
+        calls.append(kwargs)
+        return tmp_path / "by_dataset.csv", tmp_path / "summary.csv"
+
+    monkeypatch.setattr(attribution, "run_mouse_coarse", fake_run_mouse_coarse)
+
+    assert attribution.main(arguments) == 0
+    assert len(calls) == 1
+    assert calls[0]["jobs"] == 1
+    assert calls[0]["retain_fit_artifacts"] is True
+    assert calls[0]["configurations"] == mouse_alpha5_retained_configurations()
 
 
 def test_focused_discovery_result_manifest_hashes_current_artifacts() -> None:

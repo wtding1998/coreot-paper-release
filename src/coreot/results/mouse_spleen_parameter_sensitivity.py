@@ -13,7 +13,6 @@ import yaml
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
 
 
 TAU_VALUES = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0)
@@ -183,8 +182,6 @@ def render_mouse_spleen_parameter_sensitivity(
     )
     x_labels = [f"{value:g}" for value in DISPLAY_TAU_MAX]
     y_labels = [f"{value:g}" for value in DISPLAY_TAU_MIN]
-    selected_row = DISPLAY_TAU_MIN.index(SELECTED_TAU_MIN)
-    selected_column = DISPLAY_TAU_MAX.index(SELECTED_TAU_MAX)
     for axis, colorbar_axis, (column, title, colorbar_label) in zip(
         axes, colorbar_axes, metrics, strict=True
     ):
@@ -218,25 +215,6 @@ def render_mouse_spleen_parameter_sensitivity(
                     fontsize=6.1,
                     color=("white" if scaled < 0.22 or scaled > 0.82 else "#1F1F1F"),
                 )
-        axis.add_patch(
-            Rectangle(
-                (selected_column - 0.48, selected_row - 0.48),
-                0.96,
-                0.96,
-                fill=False,
-                edgecolor="white",
-                linewidth=1.8,
-            )
-        )
-        axis.scatter(
-            selected_column - 0.32,
-            selected_row + 0.32,
-            marker="*",
-            s=38,
-            color="white",
-            edgecolor="#202020",
-            linewidth=0.4,
-        )
         axis.set_xticks(range(len(DISPLAY_TAU_MAX)), x_labels)
         axis.set_yticks(range(len(DISPLAY_TAU_MIN)), y_labels)
         axis.set_xlabel(r"$\tau_{\max}$")
@@ -261,7 +239,7 @@ def _sha256_file(path: Path) -> str:
 def write_mouse_spleen_parameter_sensitivity(
     *, project_root: Path = Path(".")
 ) -> dict[str, Path]:
-    """Write source data, figure formats, alt text, and provenance."""
+    """Write source data, figure formats, and provenance."""
     project_root = project_root.resolve()
     grid_root = (
         project_root
@@ -285,20 +263,11 @@ def write_mouse_spleen_parameter_sensitivity(
         for suffix in ("png", "pdf", "svg")
     }
     render_mouse_spleen_parameter_sensitivity(frame, outputs)
-    alt_path = figure_root / "manuscript_fig_mouse_spleen_supp_parameter_sensitivity_alt.txt"
-    alt_path.write_text(
-        "Two-panel mouse-spleen query-penalty-bound sensitivity figure. Panel A "
-        "shows Proliferating-cell average precision, and Panel B shows "
-        "represented-state forced macro-F1 over a local three-by-three grid "
-        "centered on the reported operating point.\n",
-        encoding="utf-8",
-    )
     artifacts = {
         "source_data": source_data_path,
         "figure_png": outputs["png"],
         "figure_pdf": outputs["pdf"],
         "figure_svg": outputs["svg"],
-        "alt_text": alt_path,
     }
     manifest = {
         "analysis_id": "mouse_spleen_query_penalty_sensitivity_figure",

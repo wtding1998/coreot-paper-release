@@ -1039,7 +1039,6 @@ def test_generate_report_leave_one_configs_keeps_baselines_and_selected_params(
                 "methods": [
                     {"name": "nn"},
                     {"name": "uniform_uot", "tau_source": 1.0, "tau_target": 1.0},
-                    {"name": "balanced_ot", "alpha": 0.0},
                     {
                         "name": "coreot_full",
                         "tau_min": 0.05,
@@ -1057,7 +1056,6 @@ def test_generate_report_leave_one_configs_keeps_baselines_and_selected_params(
                 "methods": [
                     "nn",
                     "uniform_uot",
-                    "balanced_ot",
                     "coreot_full",
                     "coreot_constant_tau",
                     "prior_only",
@@ -1095,16 +1093,15 @@ def test_generate_report_leave_one_configs_keeps_baselines_and_selected_params(
     assert [method["name"] for method in hla_transport["methods"]] == [
         "nn",
         "uniform_uot",
-        "balanced_ot",
         "coreot_full",
         "coreot_match_only",
         "prior_only",
     ]
     hla_uniform = hla_transport["methods"][1]
-    hla_full = hla_transport["methods"][3]
-    hla_match_only = hla_transport["methods"][4]
+    hla_full = hla_transport["methods"][2]
+    hla_match_only = hla_transport["methods"][3]
     isg_uniform = isg_transport["methods"][1]
-    isg_full = isg_transport["methods"][3]
+    isg_full = isg_transport["methods"][2]
     assert hla_uniform["tau_source"] == pytest.approx(0.5)
     assert hla_uniform["tau_target"] == pytest.approx(0.5)
     assert hla_full["tau_min"] == pytest.approx(2.5)
@@ -1128,7 +1125,6 @@ def test_generate_report_leave_one_configs_keeps_baselines_and_selected_params(
     assert hla_scoring["methods"] == [
         "nn",
         "uniform_uot",
-        "balanced_ot",
         "coreot_full",
         "coreot_match_only",
         "prior_only",
@@ -1667,15 +1663,15 @@ class TestReadFixedReferenceRows:
         tables.mkdir(parents=True)
         det = pd.DataFrame(
             {
-                "held_out_label": ["CD14+ cDC2", "ISG+ cDC2", "ASDC", "overall"],
-                "method": ["prior_only", "nn", "coreot_full", "balanced_ot"],
-                "method_group": ["prior", "baseline", "coreot", "baseline"],
-                "primary_score": ["prior_risk", "nn_distance", "u", "label_uncertainty"],
-                "quantity": ["auroc"] * 4,
-                "mean": [0.6, 0.8, 0.9, 0.75],
-                "std": [0.1, 0.1, 0.1, 0.1],
-                "sem": [0.05, 0.05, 0.05, 0.05],
-                "n_runs": [5, 5, 5, 5],
+                "held_out_label": ["CD14+ cDC2", "ISG+ cDC2", "ASDC"],
+                "method": ["prior_only", "nn", "coreot_full"],
+                "method_group": ["prior", "baseline", "coreot"],
+                "primary_score": ["prior_risk", "nn_distance", "u"],
+                "quantity": ["auroc"] * 3,
+                "mean": [0.6, 0.8, 0.9],
+                "std": [0.1, 0.1, 0.1],
+                "sem": [0.05, 0.05, 0.05],
+                "n_runs": [5, 5, 5],
             }
         )
         shared = pd.DataFrame(
@@ -1773,27 +1769,27 @@ class TestWriteBroadGridResults:
         tuned_tables.mkdir(parents=True)
         pd.DataFrame(
             {
-                "held_out_label": ["ISG+ cDC2", "ISG+ cDC2", "overall"],
-                "method": ["prior_only", "nn", "balanced_ot"],
-                "method_group": ["prior", "baseline", "baseline"],
-                "primary_score": ["prior_risk", "nn_distance", "label_uncertainty"],
-                "quantity": ["auroc", "auroc", "auroc"],
-                "mean": [0.60, 0.70, 0.75],
-                "std": [0.03, 0.02, 0.02],
-                "sem": [0.01, 0.01, 0.01],
-                "n_runs": [5, 5, 5],
+                "held_out_label": ["ISG+ cDC2", "ISG+ cDC2"],
+                "method": ["prior_only", "nn"],
+                "method_group": ["prior", "baseline"],
+                "primary_score": ["prior_risk", "nn_distance"],
+                "quantity": ["auroc", "auroc"],
+                "mean": [0.60, 0.70],
+                "std": [0.03, 0.02],
+                "sem": [0.01, 0.01],
+                "n_runs": [5, 5],
             }
         ).to_csv(tuned_tables / "main_detection_summary.csv", index=False)
         pd.DataFrame(
             {
-                "held_out_label": ["ISG+ cDC2", "overall"],
-                "method": ["nn", "balanced_ot"],
-                "method_group": ["baseline", "baseline"],
-                "quantity": ["forced_accuracy", "forced_accuracy"],
-                "mean": [0.65, 0.72],
-                "std": [0.04, 0.03],
-                "sem": [0.02, 0.01],
-                "n_runs": [5, 5],
+                "held_out_label": ["ISG+ cDC2"],
+                "method": ["nn"],
+                "method_group": ["baseline"],
+                "quantity": ["forced_accuracy"],
+                "mean": [0.65],
+                "std": [0.04],
+                "sem": [0.02],
+                "n_runs": [5],
             }
         ).to_csv(tuned_tables / "shared_label_transfer_summary.csv", index=False)
 
@@ -1875,27 +1871,27 @@ class TestWriteCoreotFullTauRangeResults:
         tuned_tables.mkdir(parents=True)
         pd.DataFrame(
             {
-                "held_out_label": ["ISG+ cDC2", "ISG+ cDC2", "overall"],
-                "method": ["prior_only", "nn", "balanced_ot"],
-                "method_group": ["prior", "baseline", "baseline"],
-                "primary_score": ["prior_risk", "nn_distance", "label_uncertainty"],
-                "quantity": ["auroc", "auroc", "auroc"],
-                "mean": [0.60, 0.70, 0.75],
-                "std": [0.03, 0.02, 0.02],
-                "sem": [0.01, 0.01, 0.01],
-                "n_runs": [5, 5, 5],
+                "held_out_label": ["ISG+ cDC2", "ISG+ cDC2"],
+                "method": ["prior_only", "nn"],
+                "method_group": ["prior", "baseline"],
+                "primary_score": ["prior_risk", "nn_distance"],
+                "quantity": ["auroc", "auroc"],
+                "mean": [0.60, 0.70],
+                "std": [0.03, 0.02],
+                "sem": [0.01, 0.01],
+                "n_runs": [5, 5],
             }
         ).to_csv(tuned_tables / "main_detection_summary.csv", index=False)
         pd.DataFrame(
             {
-                "held_out_label": ["ISG+ cDC2", "overall"],
-                "method": ["nn", "balanced_ot"],
-                "method_group": ["baseline", "baseline"],
-                "quantity": ["forced_accuracy", "forced_accuracy"],
-                "mean": [0.65, 0.72],
-                "std": [0.04, 0.03],
-                "sem": [0.02, 0.01],
-                "n_runs": [5, 5],
+                "held_out_label": ["ISG+ cDC2"],
+                "method": ["nn"],
+                "method_group": ["baseline"],
+                "quantity": ["forced_accuracy"],
+                "mean": [0.65],
+                "std": [0.04],
+                "sem": [0.02],
+                "n_runs": [5],
             }
         ).to_csv(tuned_tables / "shared_label_transfer_summary.csv", index=False)
 

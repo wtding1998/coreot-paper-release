@@ -7,7 +7,7 @@ import pandas as pd
 from coreot.artifacts.run_artifacts import ArtifactContractError, ArtifactFailure, RunArtifacts
 from coreot.results.grid_common import RunDescriptor, ResultsGridError, STAGE, _read_yaml
 
-FIXED_REFERENCE_METHODS: tuple[str, ...] = ("prior_only", "nn", "balanced_ot")
+FIXED_REFERENCE_METHODS: tuple[str, ...] = ("prior_only", "nn")
 DEFAULT_FIXED_REFERENCE_ROOT = Path("results/HIHA_DC/main")
 
 def _filter_completed_runs(
@@ -245,7 +245,7 @@ def _labelwise_sort_key(row: pd.Series) -> tuple[int, float, float]:
     """Sort: fixed rows first, then swept by (method_order, tau, alpha)."""
     method = str(row["method"])
     if _is_missing_tau(row.get("tau", float("nan"))):
-        ref_order = {"prior_only": 0, "nn": 1, "balanced_ot": 2}
+        ref_order = {"prior_only": 0, "nn": 1}
         return (-1, ref_order.get(method, 99), 0)
     tau_val = float(row.get("tau", 0))
     alpha_val = float(row.get("alpha", 0))

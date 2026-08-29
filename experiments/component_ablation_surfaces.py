@@ -44,6 +44,13 @@ HIHA_COMPATIBILITY_METRICS = (
 )
 HIHA_COMPATIBILITY_TAU_VALUES = (1.0, 2.0, 3.0, 4.0, 5.0)
 VARIANTS = ("match_only", "compatibility_only")
+RETAINED_FIT_FILES = (
+    "cell_transport_scores.parquet",
+    "label_probabilities.npz",
+    "method_params.yaml",
+    "sparse_coupling.parquet",
+    "transport_manifest.yaml",
+)
 VARIANT_METHOD = {
     "match_only": "coreot_match_only",
     "compatibility_only": "coreot_constant_tau",
@@ -94,7 +101,7 @@ SPECS = (
     EndpointSpec(
         "pbmc",
         "B cells",
-        "pbmc_ifnb_b_cells_stim_seed{seed}",
+        "pbmc_ifnb_b_cells_stim_seed{seed}_taumin0p5_taumax1_alpha4_coreot_full",
         "pca30_k100",
         (0.5, 0.75, 1.0, 1.25, 1.5),
         (0.5, 1.0),
@@ -104,7 +111,7 @@ SPECS = (
     EndpointSpec(
         "pbmc",
         "NK cells",
-        "pbmc_ifnb_nk_cells_stim_seed{seed}",
+        "pbmc_ifnb_nk_cells_stim_seed{seed}_taumin0p5_taumax1_alpha2_coreot_full",
         "pca30_k100",
         (0.5, 0.75, 1.0, 1.25, 1.5),
         (0.5, 1.0),
@@ -114,7 +121,7 @@ SPECS = (
     EndpointSpec(
         "pbmc",
         "Dendritic cells",
-        "pbmc_ifnb_dendritic_cells_stim_seed{seed}",
+        "pbmc_ifnb_dendritic_cells_stim_seed{seed}_taumin0p75_taumax1_alpha3_coreot_full",
         "pca30_k100",
         (0.5, 0.75, 1.0, 1.25, 1.5),
         (0.75, 1.0),
@@ -139,8 +146,12 @@ def compatibility_tau_values(spec: EndpointSpec) -> tuple[float, ...]:
     return spec.tau_values
 
 
-def _value_slug(value: float) -> str:
-    return f"{value:g}".replace(".", "p")
+def selected_compatibility_tau_values(
+    spec: EndpointSpec, *, retained_only: bool
+) -> tuple[float, ...]:
+    if retained_only and spec.experiment == "hiha":
+        return HIHA_COMPATIBILITY_TAU_VALUES
+    return compatibility_tau_values(spec)
 
 
 def _forced_metrics(joined: pd.DataFrame) -> tuple[float, float]:
@@ -327,6 +338,8 @@ def _run_variant(
     pbmc_condition: pd.Series | None,
     candidate_hash: str,
     source_hash: str,
+    retained_only: bool = False,
+    retain_fit_artifacts: bool = False,
 ) -> Path:
     method = VARIANT_METHOD[variant]
     if variant == "match_only":
@@ -337,7 +350,9 @@ def _run_variant(
         parameter_names = ("tau_source", "alpha")
         combinations = tuple(
             (tau, alpha)
-            for tau in compatibility_tau_values(spec)
+            for tau in selected_compatibility_tau_values(
+                spec, retained_only=retained_only
+            )
             for alpha in alpha_values(spec.selected_alpha)
         )
         runner = _run_coreot_constant_tau
@@ -368,12 +383,30 @@ def _run_variant(
     )
     configured = set(combinations)
     first, second = parameter_names
-    frame = frame.loc[
-        [
-            (float(getattr(row, first)), float(getattr(row, second))) in configured
-            for row in frame.itertuples(index=False)
-        ]
-    ].copy()
+
+    def fit_root(first_value: float, second_value: float) -> Path:
+        storage = "fits" if retain_fit_artifacts else "tmp"
+        return (
+            output_root
+            / storage
+            / spec.slug
+            / f"seed{seed}"
+            / variant
+            / f"{first}_{first_value:g}_{second}_{second_value:g}"
+        )
+
+    def complete_fit_artifacts(path: Path) -> bool:
+        return all((path / filename).is_file() for filename in RETAINED_FIT_FILES)
+
+    keep_rows = []
+    for row in frame.itertuples(index=False):
+        first_value = float(getattr(row, first))
+        second_value = float(getattr(row, second))
+        keep = (first_value, second_value) in configured
+        if keep and retain_fit_artifacts:
+            keep = complete_fit_artifacts(fit_root(first_value, second_value))
+        keep_rows.append(keep)
+    frame = frame.loc[keep_rows].copy()
     frame.to_csv(checkpoint_path, index=False)
     completed = {
         (float(getattr(row, first)), float(getattr(row, second)))
@@ -383,14 +416,9 @@ def _run_variant(
     for first_value, second_value in combinations:
         if (first_value, second_value) in completed:
             continue
-        temporary = (
-            output_root
-            / "tmp"
-            / spec.slug
-            / f"seed{seed}"
-            / variant
-            / f"{first}_{first_value:g}_{second}_{second_value:g}"
-        )
+        temporary = fit_root(first_value, second_value)
+        if retain_fit_artifacts and temporary.exists():
+            shutil.rmtree(temporary)
         temporary.mkdir(parents=True, exist_ok=True)
         method_config: dict[str, object] = {
             "name": method,
@@ -411,6 +439,10 @@ def _run_variant(
             )
         else:
             method_config.update({"tau_source": first_value, "alpha": second_value})
+        (temporary / "method_params.yaml").write_text(
+            yaml.safe_dump(method_config, sort_keys=True),
+            encoding="utf-8",
+        )
         started = time.perf_counter()
         runner(
             temporary,
@@ -421,6 +453,16 @@ def _run_variant(
             method_config,
         )
         runtime = time.perf_counter() - started
+        if retain_fit_artifacts and not complete_fit_artifacts(temporary):
+            missing = [
+                filename
+                for filename in RETAINED_FIT_FILES
+                if not (temporary / filename).is_file()
+            ]
+            raise ValueError(
+                f"Retained component-ablation fit lacks artifacts {missing}: "
+                f"{temporary}"
+            )
         scores = pd.read_parquet(temporary / "cell_transport_scores.parquet")
         manifest = yaml.safe_load(
             (temporary / "transport_manifest.yaml").read_text(encoding="utf-8")
@@ -446,7 +488,8 @@ def _run_variant(
             new_row if frame.empty else pd.concat([frame, new_row], ignore_index=True)
         ).sort_values([first, second])
         frame.to_csv(checkpoint_path, index=False)
-        shutil.rmtree(temporary)
+        if not retain_fit_artifacts:
+            shutil.rmtree(temporary)
     return checkpoint_path
 
 
@@ -457,7 +500,10 @@ def _run_endpoint_seed(
     runs_root: Path,
     output_root: Path,
     pbmc_condition: pd.Series | None,
-) -> tuple[Path, Path]:
+    variants: Sequence[str] = VARIANTS,
+    retained_only: bool = False,
+    retain_fit_artifacts: bool = False,
+) -> tuple[Path, ...]:
     run_root = runs_root / spec.run_prefix.format(seed=seed)
     paths = _input_paths(run_root, spec.candidate_set)
     missing = [path for path in paths.values() if not path.is_file()]
@@ -473,12 +519,7 @@ def _run_endpoint_seed(
     candidate_hash = sha256_file(paths["candidates"])
     source_hash = sha256_file(paths["source_priors"])
     if spec.experiment == "pbmc":
-        selected_run = (
-            f"{run_root.name}_taumin{_value_slug(spec.selected_tau[0])}"
-            f"_taumax{_value_slug(spec.selected_tau[1])}"
-            f"_alpha{_value_slug(spec.selected_alpha)}_coreot_full"
-        )
-        provider_root = runs_root / selected_run / "transport/provider_reliability/pca30"
+        provider_root = run_root / "transport/provider_reliability/pca30"
         provider_path = provider_root / "source_rho.csv"
         metadata_path = provider_root / "rho_metadata.yaml"
         if not provider_path.is_file() or not metadata_path.is_file():
@@ -504,8 +545,10 @@ def _run_endpoint_seed(
             pbmc_condition=pbmc_condition,
             candidate_hash=candidate_hash,
             source_hash=source_hash,
+            retained_only=retained_only,
+            retain_fit_artifacts=retain_fit_artifacts,
         )
-        for variant in VARIANTS
+        for variant in variants
     )
 
 
@@ -533,6 +576,9 @@ def run_surfaces(
     runs_root: Path,
     output_root: Path,
     pbmc_raw_path: Path,
+    variants: Sequence[str] = VARIANTS,
+    retained_only: bool = False,
+    retain_fit_artifacts: bool = False,
 ) -> None:
     specs = selected_specs(experiment, endpoints)
     pbmc_condition = _pbmc_condition_map(pbmc_raw_path) if experiment == "pbmc" else None
@@ -546,6 +592,9 @@ def run_surfaces(
                 runs_root=runs_root,
                 output_root=output_root,
                 pbmc_condition=pbmc_condition,
+                variants=variants,
+                retained_only=retained_only,
+                retain_fit_artifacts=retain_fit_artifacts,
             ): (spec.endpoint, seed)
             for spec, seed in tasks
         }
@@ -843,6 +892,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, default=None)
     parser.add_argument("--pbmc-raw-path", type=Path, default=Path("data/raw/kang_2018.h5ad"))
     parser.add_argument("--docs-fig-root", type=Path, default=Path("docs/figs"))
+    parser.add_argument(
+        "--variant",
+        action="append",
+        choices=VARIANTS,
+        default=None,
+        help="Run only the selected component variant; may be repeated.",
+    )
+    parser.add_argument(
+        "--retained-only",
+        action="store_true",
+        help="Exclude archived parameter cells from model fitting.",
+    )
+    parser.add_argument(
+        "--retain-fit-artifacts",
+        action="store_true",
+        help="Retain complete fit bundles under fits and resume only complete fits.",
+    )
     return parser
 
 
@@ -864,6 +930,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             runs_root=args.runs_root,
             output_root=output_root,
             pbmc_raw_path=args.pbmc_raw_path,
+            variants=tuple(args.variant or VARIANTS),
+            retained_only=args.retained_only,
+            retain_fit_artifacts=args.retain_fit_artifacts,
         )
     else:
         artifacts = aggregate_surfaces(

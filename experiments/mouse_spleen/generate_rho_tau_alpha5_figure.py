@@ -220,7 +220,7 @@ def caption_text() -> str:
         "heterogeneous penalty is "
         "$\\tau_{q,i}=\\tau_{\\min}+(\\tau_{\\max}-"
         "\\tau_{\\min})\\rho_{q,i}$; its paired uniform comparator uses "
-        "the empirical-query-mass-weighted mean penalty. The vertical and "
+        "the prescribed-query-mass-weighted mean penalty. The vertical and "
         "horizontal axes give $\\tau_{\\min}$ and $\\tau_{\\max}$, "
         "respectively, with "
         "$\\tau_{\\min}\\leq\\tau_{\\max}$. Diagonal cells are zero "
@@ -230,7 +230,7 @@ def caption_text() -> str:
         "weight and penalty range were examined in a follow-up exploratory "
         "search; values are point estimates from one dataset. Corresponding "
         "absolute differences are retained as scale context in Supplementary "
-        "Data 2.\n"
+        "Data 4.\n"
     )
 
 

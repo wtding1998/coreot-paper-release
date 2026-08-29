@@ -33,7 +33,7 @@ from coreot.results.grid_common import (
     summarize_run_metrics,
 )
 
-TUNED_BASELINE_METHODS: tuple[str, ...] = ("prior_only", "nn", "balanced_ot")
+TUNED_BASELINE_METHODS: tuple[str, ...] = ("prior_only", "nn")
 
 
 @dataclass(frozen=True)

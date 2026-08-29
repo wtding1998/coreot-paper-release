@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Patch
+import matplotlib
 import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, f1_score
 import yaml
 from PIL import Image
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.legend_handler import HandlerTuple
+from matplotlib.lines import Line2D
+from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 
 
 PROJECT_ROOT = Path(".")
@@ -21,15 +25,11 @@ OVERVIEW_PATH = (
     PROJECT_ROOT / "results/HIHA_DC/main/experiment_overview/table_1_experiment_overview.csv"
 )
 COMPARISON_DETECTION_PATH = (
-    PROJECT_ROOT
-    / "results/HIHA_DC/compare_baselines/tables/compare_detection_by_run.csv"
+    PROJECT_ROOT / "results/HIHA_DC/compare_baselines/tables/compare_detection_by_run.csv"
 )
-PRIMARY_DETECTION_PATH = (
-    PROJECT_ROOT / "results/HIHA_DC/main/tables/main_detection_by_run.csv"
-)
+PRIMARY_DETECTION_PATH = PROJECT_ROOT / "results/HIHA_DC/main/tables/main_detection_by_run.csv"
 COMPARISON_LABEL_TRANSFER_PATH = (
-    PROJECT_ROOT
-    / "results/HIHA_DC/compare_baselines/tables/"
+    PROJECT_ROOT / "results/HIHA_DC/compare_baselines/tables/"
     "compare_shared_label_transfer_by_run.csv"
 )
 RUNS_ROOT = PROJECT_ROOT / "runs"
@@ -43,8 +43,8 @@ PANEL_D_SIZE_INCHES = (178 / 25.4, 72 / 25.4)
 PANEL_E_SIZE_INCHES = (178 / 25.4, 108 / 25.4)
 PANEL_F_SIZE_INCHES = (178 / 25.4, 82 / 25.4)
 PANEL_RASTER_DPI = 350
-PANEL_B_XLABEL = "Average precision (AP) for held-out-state ranking"
-PANEL_C_XLABEL = "Median-deficit decrease"
+PANEL_B_XLABEL = "AP for omitted-state ranking"
+PANEL_C_XLABEL = "Decrease in median query-marginal deficit"
 PANEL_D_XLABEL = "Metric value"
 PANEL_D_YLABEL = "Metric value"
 PANEL_D_LIM = (0.80, 1.0)
@@ -56,14 +56,17 @@ PANEL_D_METRICS = (
 ENDPOINTS = ("HLA-DRhi cDC2", "ISG+ cDC2")
 PANEL_B_METHODS = (
     ("coreot_full", "u", "CoRe-OT"),
-    ("uniform_uot", "u", "Uniform UOT"),
-    ("prior_only", "prior_risk", "Prior only"),
+    ("scdot", "z_absent_score", "scDOT"),
+    ("tacco_ot", "z_absent_score", "TACCO-OT"),
     ("seurat_anchor", "u", "Seurat"),
     ("scmap_cluster", "u", "scmap-cluster"),
     ("chetah", "u", "CHETAH"),
 )
 PANEL_E_METHODS = PANEL_B_METHODS
-PANEL_E_MAPS = (("truth", "evaluation_truth", "Held-out truth"), *PANEL_E_METHODS)
+PANEL_E_MAPS = (
+    ("truth", "evaluation_truth", "Reference-omitted cells"),
+    *PANEL_E_METHODS,
+)
 PANEL_B_POSITIONS = np.array([0.0, 1.0, 2.0, 3.4, 4.4, 5.4])
 PANEL_C_REFERENCE = ("coreot_full", "u", "CoRe-OT")
 PANEL_C_COMPARATORS = (
@@ -73,19 +76,21 @@ PANEL_C_COMPARATORS = (
 )
 PANEL_D_METHODS = (
     ("coreot_full", "u", "CoRe-OT"),
-    ("uniform_uot", "u", "Uniform UOT"),
+    ("scdot", "z_absent_score", "scDOT"),
+    ("tacco_ot", "z_absent_score", "TACCO-OT"),
     ("seurat_anchor", "u", "Seurat"),
     ("scmap_cluster", "u", "scmap-cluster"),
     ("chetah", "u", "CHETAH"),
 )
 PANEL_D_CANDIDATE_SET_BY_METHOD = {
     "coreot_full": CANDIDATE_SET,
-    "uniform_uot": CANDIDATE_SET,
+    "scdot": "external_reference_mapping",
+    "tacco_ot": "external_reference_mapping",
     "seurat_anchor": "external_reference_mapping",
     "scmap_cluster": "external_reference_mapping",
     "chetah": "external_reference_mapping",
 }
-PANEL_F_MAPS = (("truth", "Ground truth"),) + tuple(
+PANEL_F_MAPS = (("truth", "Evaluation labels"),) + tuple(
     (
         method,
         {"coreot_full": "CoRe-OT", "seurat_anchor": "Seurat"}.get(method, display),
@@ -106,8 +111,8 @@ PANEL_F_HELD_OUT_POINT_SIZE = 2.5
 PANEL_F_ENDPOINT_LABEL_Y = (0.73, 0.33)
 PANEL_F_LEGEND_NCOLS = 7
 PANEL_C_GROUPS = (
-    ("held_out", "Held-out cells"),
-    ("represented_cdc2", "Represented cDC2"),
+    ("held_out", "Reference-omitted cells"),
+    ("represented_cdc2", "Represented cDC2 controls"),
 )
 PANEL_C_CONDITIONS = ("incomplete_reference", "full_reference_control")
 UMAP_N_NEIGHBORS = 15
@@ -126,6 +131,8 @@ METHOD_COLORS = {
     "uniform_uot": "#D55E00",
     "coreot_match_only": "#009E73",
     "prior_only": "#009E73",
+    "scdot": "#D55E00",
+    "tacco_ot": "#009E73",
     "seurat_anchor": "#CC79A7",
     "scmap_cluster": "#E69F00",
     "chetah": "#6A3D9A",
@@ -141,6 +148,15 @@ LIGHT_EDGE = "#A8A8A8"
 PANEL_E_ELIGIBLE_GRAY = "#C8C8C8"
 PANEL_E_CONTEXT_GRAY = "#E8E8E8"
 PANEL_E_TRUTH_COLOR = "#D73027"
+
+PANEL_A_REFERENCE_OMITTED_LABEL = "Reference-omitted\ncondition"
+PANEL_A_RESTORED_LABEL = "Restored-reference\ncondition"
+PANEL_E_LEGEND_LABELS = (
+    "Reference-omitted cells",
+    "Method-specific top-ranked $N_+$ cells",
+    "Other ranking-cohort cells",
+    "Outside ranking cohort",
+)
 
 
 class HIHAFigure2Error(ValueError):
@@ -167,7 +183,9 @@ def _read_design_source(path: Path) -> dict[str, str]:
         raise HIHAFigure2Error(f"Panel A requires the recorded subject-level 80/20 split: {split}")
     for endpoint in ("HLA-DRhi cDC2", "ISG+ cDC2"):
         if endpoint not in values["Main held-out labels"]:
-            raise HIHAFigure2Error(f"Panel A endpoint is absent from experiment overview: {endpoint}")
+            raise HIHAFigure2Error(
+                f"Panel A endpoint is absent from experiment overview: {endpoint}"
+            )
     return values
 
 
@@ -259,7 +277,7 @@ def _draw_panel_a(ax: plt.Axes, *, n_subjects: str) -> None:
         y=0.39,
         width=0.105,
         height=0.20,
-        text="Subject-level\nsplit",
+        text="Donor-level\nsplit",
         facecolor="white",
         fontsize=6.8,
     )
@@ -273,7 +291,7 @@ def _draw_panel_a(ax: plt.Axes, *, n_subjects: str) -> None:
         y=0.58,
         width=0.14,
         height=0.22,
-        text="Query 20%\nall states retained",
+        text="Query cells\nall states retained",
         facecolor=QUERY_FILL,
         edgecolor="#6B9FBC",
     )
@@ -300,44 +318,50 @@ def _draw_panel_a(ax: plt.Axes, *, n_subjects: str) -> None:
 
     _rounded_box(
         ax,
-        x=0.515,
+        x=0.505,
         y=0.51,
-        width=0.18,
+        width=0.21,
         height=0.22,
-        text="Ablated reference\ntarget absent",
+        text=PANEL_A_REFERENCE_OMITTED_LABEL,
         facecolor="#FFF1EA",
         edgecolor=HELD_OUT,
         linewidth=1.0,
     )
     _rounded_box(
         ax,
-        x=0.515,
+        x=0.505,
         y=0.20,
-        width=0.18,
+        width=0.21,
         height=0.22,
-        text="Matched full reference\ntarget present",
+        text=PANEL_A_RESTORED_LABEL,
         facecolor="#E9F5EF",
         edgecolor=RESTORED,
         linewidth=1.0,
     )
 
-    _arrow(ax, (0.698, 0.62), (0.732, 0.62), color=HELD_OUT)
-    _arrow(ax, (0.698, 0.31), (0.732, 0.31), color=RESTORED)
+    _arrow(ax, (0.718, 0.62), (0.742, 0.62), color=HELD_OUT)
+    _arrow(ax, (0.718, 0.31), (0.742, 0.31), color=RESTORED)
     _rounded_box(
         ax,
-        x=0.735,
-        y=0.25,
+        x=0.74,
+        y=0.22,
         width=0.24,
-        height=0.48,
+        height=0.54,
         text=(
-            "Within-cDC2 evaluation\n"
-            "Ablated: held-out-state ranking\n"
-            "Ablated vs full: deficit rescue"
+            "HIHA dendritic-cell benchmark\n"
+            "Evaluated fine states:\n"
+            "HLA-DRhi cDC2, ISG+ cDC2\n"
+            "within-cDC2 omitted-state ranking\n"
+            "Reference-omitted condition:\n"
+            "omitted-state ranking\n"
+            "Restored-reference condition:\n"
+            "paired reference-restoration response\n"
+            "Same query cells"
         ),
         facecolor="white",
         edgecolor=INK,
         linewidth=0.9,
-        fontsize=6.6,
+        fontsize=6.5,
     )
 
 
@@ -375,9 +399,7 @@ def _select_panel_b_detection(path: Path) -> pd.DataFrame:
         raise HIHAFigure2Error(f"Panel B source is missing columns {missing}: {path}")
 
     if "evaluation_scope" in frame.columns:
-        frame = frame.loc[
-            frame["evaluation_scope"].eq("local_within_broad_state")
-        ].copy()
+        frame = frame.loc[frame["evaluation_scope"].eq("local_within_broad_state")].copy()
 
     method_keys = {(method, score) for method, score, _ in PANEL_B_METHODS}
     selected = frame.loc[
@@ -417,13 +439,9 @@ def _select_panel_b_detection(path: Path) -> pd.DataFrame:
         if selected[column].eq("").any():
             raise HIHAFigure2Error(f"Panel B {column} must identify every source run")
     if not selected["run_id"].eq(selected["evaluation_run_id"]).all():
-        raise HIHAFigure2Error(
-            "Panel B run_id must equal the explicit evaluation_run_id"
-        )
+        raise HIHAFigure2Error("Panel B run_id must equal the explicit evaluation_run_id")
     uniform = selected["method"].eq("uniform_uot")
-    if selected.loc[uniform, "score_run_id"].eq(
-        selected.loc[uniform, "evaluation_run_id"]
-    ).any():
+    if selected.loc[uniform, "score_run_id"].eq(selected.loc[uniform, "evaluation_run_id"]).any():
         raise HIHAFigure2Error(
             "Panel B Uniform UOT rows must retain their replacement score_run_id"
         )
@@ -432,9 +450,7 @@ def _select_panel_b_detection(path: Path) -> pd.DataFrame:
         if not np.isfinite(values).all() or not values.between(0, 1).all():
             raise HIHAFigure2Error(f"Panel B {column} must contain finite values in [0, 1]")
         selected[column] = values
-    prevalence_counts = selected.groupby(["held_out_label", "seed"])[
-        "auprc_baseline"
-    ].nunique()
+    prevalence_counts = selected.groupby(["held_out_label", "seed"])["auprc_baseline"].nunique()
     if not prevalence_counts.eq(1).all():
         raise HIHAFigure2Error("Panel B prevalence differs across methods within a split")
 
@@ -581,6 +597,14 @@ def _draw_panel_b(data: pd.DataFrame) -> plt.Figure:
             linewidth=1.0,
             label="Mean ± sample SD",
         ),
+        Line2D(
+            [0],
+            [0],
+            linestyle=(0, (3, 2)),
+            color="#777777",
+            linewidth=0.9,
+            label="Mean prevalence",
+        ),
     ]
     fig.legend(
         handles=legend_handles,
@@ -706,9 +730,7 @@ def _select_panel_c_controls(path: Path) -> pd.DataFrame:
     result = pd.DataFrame(rows)
     if len(result) != len(ENDPOINTS) * 5 * len(PANEL_C_COMPARATORS):
         raise HIHAFigure2Error(f"Unexpected Panel C paired-row count: {len(result)}")
-    return result.sort_values(
-        ["held_out_label", "comparator_method", "seed"], ignore_index=True
-    )
+    return result.sort_values(["held_out_label", "comparator_method", "seed"], ignore_index=True)
 
 
 def _panel_c_limits(data: pd.DataFrame) -> tuple[float, float]:
@@ -963,15 +985,11 @@ def _read_panel_c_scores(run_root: Path, condition: str) -> pd.DataFrame:
     reconstructed_u = np.maximum(numeric["a"] - numeric["a_hat"], 0.0)
     reconstructed_u /= numeric["a"] + TRANSPORT_ETA
     if not np.allclose(reconstructed_u, numeric["u"], rtol=1.0e-7, atol=1.0e-10):
-        raise HIHAFigure2Error(
-            f"Panel C deficit does not match [a-a_hat]_+/(a+eta): {path}"
-        )
+        raise HIHAFigure2Error(f"Panel C deficit does not match [a-a_hat]_+/(a+eta): {path}")
     if not numeric["u"].between(0, 1).all():
         raise HIHAFigure2Error(f"Panel C deficit must lie in [0, 1]: {path}")
     frame[["a", "a_hat", "u"]] = numeric
-    return frame[["cell_id", "a", "a_hat", "u"]].sort_values(
-        "cell_id", ignore_index=True
-    )
+    return frame[["cell_id", "a", "a_hat", "u"]].sort_values("cell_id", ignore_index=True)
 
 
 def _read_label_probability_matrix(
@@ -980,18 +998,12 @@ def _read_label_probability_matrix(
     expected_cell_ids: set[str],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, Path]:
     path = (
-        run_root
-        / "transport"
-        / condition
-        / CANDIDATE_SET
-        / "coreot_full/label_probabilities.npz"
+        run_root / "transport" / condition / CANDIDATE_SET / "coreot_full/label_probabilities.npz"
     )
     with np.load(path, allow_pickle=True) as archive:
         required = {"cell_ids", "labels", "probabilities"}
         if set(archive.files) != required:
-            raise HIHAFigure2Error(
-                f"Panel C label-probability archive has unexpected keys: {path}"
-            )
+            raise HIHAFigure2Error(f"Panel C label-probability archive has unexpected keys: {path}")
         cell_ids = np.asarray(archive["cell_ids"]).astype(str)
         labels = np.asarray(archive["labels"]).astype(str)
         probabilities = np.asarray(archive["probabilities"], dtype=float)
@@ -1048,14 +1060,15 @@ def _collect_panel_c_data(
         if not run_root.is_dir():
             raise HIHAFigure2Error(f"Panel C run root is missing: {run_root}")
         truths = {
-            condition: _read_query_truth(run_root, condition)
-            for condition in PANEL_C_CONDITIONS
+            condition: _read_query_truth(run_root, condition) for condition in PANEL_C_CONDITIONS
         }
         truth_columns = ["cell_id", "true_label", "removed_state"]
         if not truths[PANEL_C_CONDITIONS[0]][truth_columns].equals(
             truths[PANEL_C_CONDITIONS[1]][truth_columns]
         ):
-            raise HIHAFigure2Error(f"Panel C paired query truth differs across conditions: {run_root}")
+            raise HIHAFigure2Error(
+                f"Panel C paired query truth differs across conditions: {run_root}"
+            )
         truth = truths["incomplete_reference"].copy()
         removed = truth["removed_state"].astype(str).unique().tolist()
         if removed != [str(run.held_out_label)]:
@@ -1064,15 +1077,16 @@ def _collect_panel_c_data(
             )
 
         target_labels = {
-            condition: _read_target_labels(run_root, condition)
-            for condition in PANEL_C_CONDITIONS
+            condition: _read_target_labels(run_root, condition) for condition in PANEL_C_CONDITIONS
         }
         incomplete_states = set(target_labels["incomplete_reference"]["target_label"])
         full_states = set(target_labels["full_reference_control"]["target_label"])
         if str(run.held_out_label) in incomplete_states:
             raise HIHAFigure2Error(f"Held-out state is present in ablated reference: {run_root}")
         if str(run.held_out_label) not in full_states:
-            raise HIHAFigure2Error(f"Held-out state is absent from matched full reference: {run_root}")
+            raise HIHAFigure2Error(
+                f"Held-out state is absent from restored-reference condition: {run_root}"
+            )
 
         full_mapping = (
             target_labels["full_reference_control"][["target_label", "broad_label"]]
@@ -1085,7 +1099,7 @@ def _collect_panel_c_data(
                 truth.loc[truth["broad_label"].isna(), "true_label"].astype(str).unique()
             )
             raise HIHAFigure2Error(
-                f"Panel C query labels lack a full-reference broad mapping "
+                f"Panel C query labels lack a restored-reference broad mapping "
                 f"{missing_labels}: {run_root}"
             )
         truth["truth_group"] = np.select(
@@ -1102,16 +1116,15 @@ def _collect_panel_c_data(
         full_truth = truths["full_reference_control"]
         if full_truth["is_absent_state"].astype(bool).any():
             raise HIHAFigure2Error(
-                f"Panel C full-reference truth still marks absent query states: {run_root}"
+                f"Panel C restored-reference truth still marks absent query states: {run_root}"
             )
         if not full_truth["is_shared_state"].astype(bool).all():
             raise HIHAFigure2Error(
-                f"Panel C full-reference truth does not mark every query state shared: {run_root}"
+                f"Panel C restored-reference truth does not mark every query state shared: {run_root}"
             )
 
         scores = {
-            condition: _read_panel_c_scores(run_root, condition)
-            for condition in PANEL_C_CONDITIONS
+            condition: _read_panel_c_scores(run_root, condition) for condition in PANEL_C_CONDITIONS
         }
         truth_ids = set(truth["cell_id"])
         for condition, frame in scores.items():
@@ -1134,17 +1147,13 @@ def _collect_panel_c_data(
             str(run.held_out_label),
             truth_ids,
         )
-        paired["restored_state_probability"] = paired["cell_id"].map(
-            restored_probability
-        )
+        paired["restored_state_probability"] = paired["cell_id"].map(restored_probability)
         paired["delta_u_cellwise"] = paired["u_ablated"] - paired["u_full"]
         paired = paired.loc[paired["truth_group"].isin(["held_out", "represented_cdc2"])]
         paired.insert(0, "run_id", str(run.run_id))
         paired.insert(1, "held_out_label", str(run.held_out_label))
         paired.insert(2, "seed", int(run.seed))
-        paired.loc[
-            paired["truth_group"].ne("held_out"), "restored_state_probability"
-        ] = np.nan
+        paired.loc[paired["truth_group"].ne("held_out"), "restored_state_probability"] = np.nan
         cell_frames.append(
             paired[
                 [
@@ -1203,22 +1212,14 @@ def _collect_panel_c_data(
                     float(held["delta_median_u"]) - float(control["delta_median_u"])
                 ),
                 "n_held_out_cells": held["n_cells"],
-                "median_restored_state_probability": float(
-                    held_probabilities.median()
-                ),
+                "median_restored_state_probability": float(held_probabilities.median()),
                 "mean_restored_state_probability": float(held_probabilities.mean()),
             }
         )
         source_paths.extend(
             [
-                str(
-                    run_root
-                    / "benchmark/incomplete_reference/evaluation_truth/query_truth.csv"
-                ),
-                str(
-                    run_root
-                    / "benchmark/full_reference_control/model_visible/target_labels.csv"
-                ),
+                str(run_root / "benchmark/incomplete_reference/evaluation_truth/query_truth.csv"),
+                str(run_root / "benchmark/full_reference_control/model_visible/target_labels.csv"),
                 str(
                     run_root
                     / "transport/incomplete_reference"
@@ -1250,9 +1251,7 @@ def _collect_panel_c_data(
     if len(summary) != len(ENDPOINTS) * 5 * len(PANEL_C_GROUPS):
         raise HIHAFigure2Error(f"Unexpected Panel C summary-row count: {len(summary)}")
     if len(specificity) != len(ENDPOINTS) * 5:
-        raise HIHAFigure2Error(
-            f"Unexpected Panel C specificity-row count: {len(specificity)}"
-        )
+        raise HIHAFigure2Error(f"Unexpected Panel C specificity-row count: {len(specificity)}")
     numeric = specificity[
         [
             "held_out_delta_median_u",
@@ -1278,11 +1277,15 @@ def _draw_panel_c_rescue(
     probability_axis = fig.add_subplot(grid[0, 1], sharey=rescue_axis)
 
     rescue_rows = (
-        ("held_out_delta_median_u", "Held-out cells", "held_out"),
-        ("control_delta_median_u", "Represented cDC2", "represented_cdc2"),
+        ("held_out_delta_median_u", "Reference-omitted cells", "held_out"),
+        (
+            "control_delta_median_u",
+            "Represented cDC2 controls",
+            "represented_cdc2",
+        ),
         (
             "restoration_specificity",
-            "Control-adjusted, $\\Delta^{\\mathrm{CA}}$",
+            "Control-adjusted decrease, $\\Delta^{\\mathrm{CA}}$",
             "specificity",
         ),
     )
@@ -1298,8 +1301,7 @@ def _draw_panel_c_rescue(
         ENDPOINTS[1]: np.array([1.8, 0.8, -0.2]),
     }
     endpoint_centers = {
-        endpoint: float(positions.mean())
-        for endpoint, positions in endpoint_positions.items()
+        endpoint: float(positions.mean()) for endpoint, positions in endpoint_positions.items()
     }
 
     rescue_values = specificity[
@@ -1322,9 +1324,7 @@ def _draw_panel_c_rescue(
             specificity["held_out_label"].eq(endpoint)
         ].sort_values("seed")
         if len(endpoint_specificity) != 5:
-            raise HIHAFigure2Error(
-                f"Panel C rescue plot lacks five donor splits for {endpoint}"
-            )
+            raise HIHAFigure2Error(f"Panel C rescue plot lacks five donor splits for {endpoint}")
 
         for position, (quantity, _, color_key) in zip(
             endpoint_positions[endpoint],
@@ -1357,7 +1357,7 @@ def _draw_panel_c_rescue(
                 zorder=4,
             )
         rescue_axis.text(
-            -0.32,
+            -0.20,
             endpoint_centers[endpoint],
             endpoint,
             transform=rescue_axis.get_yaxis_transform(),
@@ -1369,9 +1369,9 @@ def _draw_panel_c_rescue(
             color=INK,
         )
 
-        probabilities = endpoint_specificity[
-            "median_restored_state_probability"
-        ].to_numpy(dtype=float)
+        probabilities = endpoint_specificity["median_restored_state_probability"].to_numpy(
+            dtype=float
+        )
         probability_axis.scatter(
             probabilities,
             endpoint_centers[endpoint] + seed_offsets,
@@ -1397,9 +1397,7 @@ def _draw_panel_c_rescue(
             zorder=4,
         )
 
-    row_positions = np.concatenate(
-        [endpoint_positions[endpoint] for endpoint in ENDPOINTS]
-    )
+    row_positions = np.concatenate([endpoint_positions[endpoint] for endpoint in ENDPOINTS])
     row_labels = [label for _ in ENDPOINTS for _, label, _ in rescue_rows]
     rescue_axis.axvline(0, color=INK, linewidth=0.8, zorder=2)
     rescue_axis.axhline(2.6, color="#B8B8B8", linewidth=0.7, zorder=1)
@@ -1421,7 +1419,7 @@ def _draw_panel_c_rescue(
     rescue_axis.grid(axis="x", color="#E5E5E5", linewidth=0.5)
     rescue_axis.spines[["top", "right"]].set_visible(False)
     rescue_axis.set_xlabel(
-        PANEL_C_XLABEL,
+        "Decrease in median\nquery-marginal deficit",
         fontsize=7,
         labelpad=7,
     )
@@ -1437,13 +1435,18 @@ def _draw_panel_c_rescue(
     probability_axis.grid(axis="x", color="#E5E5E5", linewidth=0.5)
     probability_axis.spines[["top", "right", "left"]].set_visible(False)
     probability_axis.set_title(
-        "Restored-state\nconditional probability",
+        "Median restored-state\ndestination fraction",
         fontsize=7,
         pad=5,
     )
 
     fig.text(0.012, 0.975, "C", ha="left", va="top", fontsize=11, fontweight="bold")
-    fig.subplots_adjust(left=0.205, right=0.985, top=0.88, bottom=0.18)
+    probability_axis.set_xlabel(
+        "Median restored-state\ndestination fraction",
+        fontsize=6.5,
+        labelpad=8,
+    )
+    fig.subplots_adjust(left=0.31, right=0.985, top=0.88, bottom=0.22)
     return fig
 
 
@@ -1465,22 +1468,16 @@ def _panel_e_spatial_run_index(path: Path) -> pd.DataFrame:
     required = {"run_id", "held_out_label", "seed", "method", "score"}
     missing = sorted(required - set(frame.columns))
     if missing:
-        raise HIHAFigure2Error(
-            f"Panel E detection table is missing columns {missing}: {path}"
-        )
+        raise HIHAFigure2Error(f"Panel E detection table is missing columns {missing}: {path}")
     method_keys = {(method, score) for method, score, _ in PANEL_E_METHODS}
-    observed_method_keys = pd.MultiIndex.from_frame(
-        frame[["method", "score"]].astype(str)
-    )
+    observed_method_keys = pd.MultiIndex.from_frame(frame[["method", "score"]].astype(str))
     selected = frame.loc[
         frame["held_out_label"].isin(ENDPOINTS)
         & frame["seed"].eq(REPRESENTATIVE_SEED)
         & observed_method_keys.isin(method_keys)
     ].copy()
     expected = {
-        (endpoint, method, score)
-        for endpoint in ENDPOINTS
-        for method, score, _ in PANEL_E_METHODS
+        (endpoint, method, score) for endpoint in ENDPOINTS for method, score, _ in PANEL_E_METHODS
     }
     observed = set(
         zip(
@@ -1522,14 +1519,11 @@ def _panel_e_spatial_run_index(path: Path) -> pd.DataFrame:
                 f"{sorted(selected_ids)}"
             )
         uniform_ids = set(
-            endpoint_rows.loc[
-                endpoint_rows["method"].eq("uniform_uot"), "run_id"
-            ].astype(str)
+            endpoint_rows.loc[endpoint_rows["method"].eq("uniform_uot"), "run_id"].astype(str)
         )
         if len(uniform_ids) != 1:
             raise HIHAFigure2Error(
-                f"Panel E requires one uniform-UOT run for {endpoint}: "
-                f"{sorted(uniform_ids)}"
+                f"Panel E requires one uniform-UOT run for {endpoint}: {sorted(uniform_ids)}"
             )
         rows.append(
             {
@@ -1555,9 +1549,7 @@ def _read_query_embedding(run_root: Path) -> tuple[np.ndarray, np.ndarray, list[
         )
     cells["cell_id"] = cells["cell_id"].astype(str)
     if cells["cell_id"].duplicated().any():
-        raise HIHAFigure2Error(
-            f"Figure 2 embedding cells contain duplicate IDs: {cells_path}"
-        )
+        raise HIHAFigure2Error(f"Figure 2 embedding cells contain duplicate IDs: {cells_path}")
     matrix = np.load(matrix_path)
     if matrix.shape != (len(cells), 30):
         raise HIHAFigure2Error(
@@ -1578,13 +1570,9 @@ def _read_query_embedding(run_root: Path) -> tuple[np.ndarray, np.ndarray, list[
 
 def _compute_query_umap(matrix: np.ndarray) -> np.ndarray:
     if matrix.ndim != 2 or matrix.shape[1] != 30:
-        raise HIHAFigure2Error(
-            f"Figure 2 UMAP input must have 30 columns; got {matrix.shape}"
-        )
+        raise HIHAFigure2Error(f"Figure 2 UMAP input must have 30 columns; got {matrix.shape}")
     if len(matrix) <= UMAP_N_NEIGHBORS or not np.isfinite(matrix).all():
-        raise HIHAFigure2Error(
-            "Figure 2 UMAP input is too small or contains nonfinite values"
-        )
+        raise HIHAFigure2Error("Figure 2 UMAP input is too small or contains nonfinite values")
     import anndata as ad
     import scanpy as sc
 
@@ -1603,9 +1591,7 @@ def _compute_query_umap(matrix: np.ndarray) -> np.ndarray:
     )
     coordinates = np.asarray(query.obsm["X_umap"], dtype=float)
     if coordinates.shape != (len(matrix), 2) or not np.isfinite(coordinates).all():
-        raise HIHAFigure2Error(
-            f"Figure 2 UMAP returned invalid coordinates: {coordinates.shape}"
-        )
+        raise HIHAFigure2Error(f"Figure 2 UMAP returned invalid coordinates: {coordinates.shape}")
     return coordinates
 
 
@@ -1620,9 +1606,7 @@ def _read_panel_e_method_scores(
     required = {"cell_id", "method", score}
     missing = sorted(required - set(frame.columns))
     if missing:
-        raise HIHAFigure2Error(
-            f"Panel E score table is missing columns {missing}: {path}"
-        )
+        raise HIHAFigure2Error(f"Panel E score table is missing columns {missing}: {path}")
     selected = frame.loc[frame["method"].astype(str).eq(method), ["cell_id", score]].copy()
     selected["cell_id"] = selected["cell_id"].astype(str)
     if selected["cell_id"].duplicated().any():
@@ -1631,14 +1615,10 @@ def _read_panel_e_method_scores(
         )
     observed_ids = set(selected["cell_id"])
     if observed_ids != expected_ids:
-        raise HIHAFigure2Error(
-            f"Panel E {method} score IDs differ from query truth: {path}"
-        )
+        raise HIHAFigure2Error(f"Panel E {method} score IDs differ from query truth: {path}")
     selected[score] = pd.to_numeric(selected[score], errors="coerce")
     if not np.isfinite(selected[score].to_numpy(dtype=float)).all():
-        raise HIHAFigure2Error(
-            f"Panel E {method} scores contain nonfinite values: {path}"
-        )
+        raise HIHAFigure2Error(f"Panel E {method} scores contain nonfinite values: {path}")
     return selected.rename(columns={score: "oriented_score"})
 
 
@@ -1687,9 +1667,7 @@ def _collect_panel_e_umap_data(
                 "umap_2": coordinates[:, 1],
             }
         )
-        full_targets = _read_target_labels(
-            selected_root, "full_reference_control"
-        )
+        full_targets = _read_target_labels(selected_root, "full_reference_control")
         true_mapping = (
             full_targets[["target_label", "broad_label"]]
             .drop_duplicates()
@@ -1698,7 +1676,7 @@ def _collect_panel_e_umap_data(
         truth["true_broad_label"] = truth["true_label"].map(true_mapping)
         if truth["true_broad_label"].isna().any():
             raise HIHAFigure2Error(
-                f"Panel E query truth lacks full-reference broad mappings: {selected_root}"
+                f"Panel E query truth lacks restored-reference broad mappings: {selected_root}"
             )
         base = truth.merge(coordinate_frame, on="cell_id", validate="one_to_one")
         base.insert(0, "held_out_label", str(run.held_out_label))
@@ -1736,20 +1714,13 @@ def _collect_panel_e_umap_data(
         )
 
         internal_path = (
-            selected_root
-            / "scoring/incomplete_reference"
-            / CANDIDATE_SET
-            / "cell_scores.parquet"
+            selected_root / "scoring/incomplete_reference" / CANDIDATE_SET / "cell_scores.parquet"
         )
         uniform_path = (
-            uniform_root
-            / "scoring/incomplete_reference"
-            / CANDIDATE_SET
-            / "cell_scores.parquet"
+            uniform_root / "scoring/incomplete_reference" / CANDIDATE_SET / "cell_scores.parquet"
         )
         external_path = (
-            selected_root
-            / "scoring/incomplete_reference/external_reference_mapping/"
+            selected_root / "scoring/incomplete_reference/external_reference_mapping/"
             "cell_scores.parquet"
         )
         path_by_method = {
@@ -1776,9 +1747,7 @@ def _collect_panel_e_umap_data(
             method_frame["map_id"] = method
             method_frame["map_display"] = display
             method_frame["score_run_id"] = (
-                str(run.uniform_run_id)
-                if method == "uniform_uot"
-                else str(run.selected_run_id)
+                str(run.uniform_run_id) if method == "uniform_uot" else str(run.selected_run_id)
             )
             method_frame["score_name"] = score
             method_frame["is_selected"] = method_frame["cell_id"].isin(selected_ids)
@@ -1786,19 +1755,10 @@ def _collect_panel_e_umap_data(
                 raise HIHAFigure2Error(
                     f"Panel E {method} did not select exactly {n_held_out} cells"
                 )
-            if not method_frame.loc[
-                method_frame["is_selected"], "is_within_cdc2"
-            ].all():
-                raise HIHAFigure2Error(
-                    f"Panel E {method} selected a cell outside the cDC2 cohort"
-                )
+            if not method_frame.loc[method_frame["is_selected"], "is_within_cdc2"].all():
+                raise HIHAFigure2Error(f"Panel E {method} selected a cell outside the cDC2 cohort")
             frames.append(method_frame)
-            overlap = int(
-                (
-                    method_frame["is_selected"]
-                    & method_frame["is_held_out_truth"]
-                ).sum()
-            )
+            overlap = int((method_frame["is_selected"] & method_frame["is_held_out_truth"]).sum())
             summary_rows.append(
                 {
                     "held_out_label": str(run.held_out_label),
@@ -1839,9 +1799,7 @@ def _collect_panel_e_umap_data(
     cells.insert(
         0,
         "run_id",
-        cells["held_out_label"].map(
-            run_index.set_index("held_out_label")["selected_run_id"]
-        ),
+        cells["held_out_label"].map(run_index.set_index("held_out_label")["selected_run_id"]),
     )
     cells.insert(2, "seed", REPRESENTATIVE_SEED)
     cells = cells[
@@ -1868,25 +1826,17 @@ def _collect_panel_e_umap_data(
         ["held_out_label", "map_id"], ignore_index=True
     )
     expected_summary = {
-        (endpoint, map_id)
-        for endpoint in ENDPOINTS
-        for map_id, _, _ in PANEL_E_MAPS
+        (endpoint, map_id) for endpoint in ENDPOINTS for map_id, _, _ in PANEL_E_MAPS
     }
-    observed_summary = set(
-        summary[["held_out_label", "map_id"]].itertuples(index=False, name=None)
-    )
+    observed_summary = set(summary[["held_out_label", "map_id"]].itertuples(index=False, name=None))
     if observed_summary != expected_summary:
-        raise HIHAFigure2Error(
-            "Panel E summary keys differ from the endpoint-map contract"
-        )
+        raise HIHAFigure2Error("Panel E summary keys differ from the endpoint-map contract")
     if cells.duplicated(["held_out_label", "map_id", "cell_id"]).any():
         raise HIHAFigure2Error("Panel E contains duplicate endpoint-map-cell rows")
     coordinates = cells[["umap_1", "umap_2"]].to_numpy(dtype=float)
     if not np.isfinite(coordinates).all():
         raise HIHAFigure2Error("Panel E UMAP coordinates contain nonfinite values")
-    method_scores = cells.loc[cells["map_id"].ne("truth"), "oriented_score"].to_numpy(
-        dtype=float
-    )
+    method_scores = cells.loc[cells["map_id"].ne("truth"), "oriented_score"].to_numpy(dtype=float)
     if not np.isfinite(method_scores).all():
         raise HIHAFigure2Error("Panel E method scores contain nonfinite values")
     return cells, summary, list(dict.fromkeys(source_paths))
@@ -1953,9 +1903,7 @@ def _draw_panel_e_umap(cells: pd.DataFrame) -> plt.Figure:
                 rasterized=True,
                 zorder=2,
             )
-            highlight_color = (
-                PANEL_E_TRUTH_COLOR if map_id == "truth" else METHOD_COLORS[map_id]
-            )
+            highlight_color = PANEL_E_TRUTH_COLOR if map_id == "truth" else METHOD_COLORS[map_id]
             axis.scatter(
                 selected["umap_1"],
                 selected["umap_2"],
@@ -1983,7 +1931,7 @@ def _draw_panel_e_umap(cells: pd.DataFrame) -> plt.Figure:
             color=INK,
         )
 
-    fig.text(0.012, 0.975, "D", ha="left", va="top", fontsize=11, fontweight="bold")
+    fig.text(0.012, 0.975, "E", ha="left", va="top", fontsize=11, fontweight="bold")
     legend_handles = [
         Line2D(
             [0],
@@ -1991,19 +1939,23 @@ def _draw_panel_e_umap(cells: pd.DataFrame) -> plt.Figure:
             marker="o",
             linestyle="",
             markerfacecolor=PANEL_E_TRUTH_COLOR,
-            markeredgecolor="none",
+            markeredgecolor="white",
+            markeredgewidth=0.55,
             markersize=4.8,
-            label="Held-out truth",
+            label=PANEL_E_LEGEND_LABELS[0],
         ),
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            linestyle="",
-            markerfacecolor=INK,
-            markeredgecolor="none",
-            markersize=4.8,
-            label="Method color: top-$N_\\ell$ weak-support rank within cDC2",
+        tuple(
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="",
+                markerfacecolor=METHOD_COLORS[method],
+                markeredgecolor="white",
+                markeredgewidth=0.45,
+                markersize=4.8,
+            )
+            for method, _, _ in PANEL_E_METHODS
         ),
         Line2D(
             [0],
@@ -2011,9 +1963,10 @@ def _draw_panel_e_umap(cells: pd.DataFrame) -> plt.Figure:
             marker="o",
             linestyle="",
             markerfacecolor=PANEL_E_ELIGIBLE_GRAY,
-            markeredgecolor="none",
+            markeredgecolor="white",
+            markeredgewidth=0.55,
             markersize=4.5,
-            label="Eligible cDC2, not selected",
+            label=PANEL_E_LEGEND_LABELS[2],
         ),
         Line2D(
             [0],
@@ -2021,20 +1974,25 @@ def _draw_panel_e_umap(cells: pd.DataFrame) -> plt.Figure:
             marker="o",
             linestyle="",
             markerfacecolor=PANEL_E_CONTEXT_GRAY,
-            markeredgecolor="none",
+            markeredgecolor="white",
+            markeredgewidth=0.55,
             markersize=4.2,
-            label="Outside cDC2 evaluation cohort",
+            label=PANEL_E_LEGEND_LABELS[3],
         ),
     ]
     fig.legend(
         handles=legend_handles,
+        labels=PANEL_E_LEGEND_LABELS,
+        handler_map={tuple: HandlerTuple(ndivide=None, pad=0.15)},
         loc="lower center",
         ncol=4,
         frameon=False,
         bbox_to_anchor=(0.52, 0.025),
-        fontsize=6.2,
-        handletextpad=0.35,
-        columnspacing=1.0,
+        fontsize=6.5,
+        handlelength=3.4,
+        handletextpad=0.4,
+        labelspacing=0.4,
+        columnspacing=1.1,
     )
     fig.subplots_adjust(
         left=0.065,
@@ -2057,9 +2015,7 @@ def _validate_panel_e_umap_raster(path: Path) -> None:
             )
         aspect = image.width / image.height
         if not 1.55 <= aspect <= 1.75:
-            raise HIHAFigure2Error(
-                f"Unexpected Panel E aspect ratio: {path} has {image.size}"
-            )
+            raise HIHAFigure2Error(f"Unexpected Panel E aspect ratio: {path} has {image.size}")
 
 
 def _select_panel_d_label_transfer(path: Path) -> pd.DataFrame:
@@ -2082,9 +2038,7 @@ def _select_panel_d_label_transfer(path: Path) -> pd.DataFrame:
         raise HIHAFigure2Error(f"Panel D source is missing columns {missing}: {path}")
 
     method_keys = {(method, score) for method, score, _ in PANEL_D_METHODS}
-    observed_method_keys = pd.MultiIndex.from_frame(
-        frame[["method", "score"]].astype(str)
-    )
+    observed_method_keys = pd.MultiIndex.from_frame(frame[["method", "score"]].astype(str))
     selected = frame.loc[
         frame["held_out_label"].isin(ENDPOINTS)
         & frame["condition_id"].eq("incomplete_reference")
@@ -2116,9 +2070,10 @@ def _select_panel_d_label_transfer(path: Path) -> pd.DataFrame:
     if selected.duplicated(keys).any():
         raise HIHAFigure2Error(f"Panel D source has duplicate keys: {keys}")
     expected_candidate_sets = selected["method"].map(PANEL_D_CANDIDATE_SET_BY_METHOD)
-    if expected_candidate_sets.isna().any() or not selected["candidate_set"].eq(
-        expected_candidate_sets
-    ).all():
+    if (
+        expected_candidate_sets.isna().any()
+        or not selected["candidate_set"].eq(expected_candidate_sets).all()
+    ):
         observed_candidate_sets = (
             selected.groupby("method")["candidate_set"].unique().apply(list).to_dict()
         )
@@ -2130,9 +2085,7 @@ def _select_panel_d_label_transfer(path: Path) -> pd.DataFrame:
     for metric in ("forced_macro_f1", "forced_accuracy"):
         values = pd.to_numeric(selected[metric], errors="coerce")
         if not np.isfinite(values).all() or not values.between(0, 1).all():
-            raise HIHAFigure2Error(
-                f"Panel D {metric} must contain finite values in [0, 1]"
-            )
+            raise HIHAFigure2Error(f"Panel D {metric} must contain finite values in [0, 1]")
         selected[metric] = values
     for column in ("n_shared", "n_forced_labeled"):
         values = pd.to_numeric(selected[column], errors="coerce")
@@ -2148,8 +2101,7 @@ def _select_panel_d_label_transfer(path: Path) -> pd.DataFrame:
     for metric in ("forced_macro_f1", "forced_accuracy"):
         if not selected[metric].between(lower, upper).all():
             raise HIHAFigure2Error(
-                f"Panel D {metric} observations fall outside "
-                f"the prespecified axis {PANEL_D_LIM}"
+                f"Panel D {metric} observations fall outside the prespecified axis {PANEL_D_LIM}"
             )
     display = {method: name for method, _, name in PANEL_D_METHODS}
     selected["method_display"] = selected["method"].map(display)
@@ -2181,54 +2133,46 @@ def _draw_panel_d_label_transfer(data: pd.DataFrame) -> plt.Figure:
         sharey=True,
     )
     fig.patch.set_facecolor("white")
-    method_displays = {
-        method: display for method, _, display in PANEL_D_METHODS
-    }
+    method_displays = {method: display for method, _, display in PANEL_D_METHODS}
     positions = np.arange(len(PANEL_D_METHODS), dtype=float)
-    bar_height = 0.22
     metric_offsets = (-0.16, 0.16)
 
     for facet_index, (ax, endpoint) in enumerate(zip(axes, ENDPOINTS, strict=True)):
         endpoint_data = data.loc[data["held_out_label"].eq(endpoint)]
         for method_index, (method, _, _) in enumerate(PANEL_D_METHODS):
-            method_data = endpoint_data.loc[
-                endpoint_data["method"].eq(method)
-            ].sort_values("seed")
+            method_data = endpoint_data.loc[endpoint_data["method"].eq(method)].sort_values("seed")
             for metric_index, (metric, _, color) in enumerate(PANEL_D_METRICS):
                 values = method_data[metric].to_numpy(dtype=float)
                 mean = float(values.mean())
                 sample_sd = float(values.std(ddof=1))
-                if not (
-                    PANEL_D_LIM[0]
-                    <= mean - sample_sd
-                    <= mean + sample_sd
-                    <= PANEL_D_LIM[1]
-                ):
+                if not (PANEL_D_LIM[0] <= mean - sample_sd <= mean + sample_sd <= PANEL_D_LIM[1]):
                     raise HIHAFigure2Error(
                         f"Panel D mean ± sample SD falls outside {PANEL_D_LIM} "
                         f"for {endpoint}, {method}, {metric}"
                     )
                 center = positions[method_index] + metric_offsets[metric_index]
-                ax.barh(
-                    center,
-                    mean - PANEL_D_LIM[0],
-                    height=bar_height * 0.88,
-                    left=PANEL_D_LIM[0],
+                split_offsets = np.linspace(-0.035, 0.035, len(values))
+                ax.scatter(
+                    values,
+                    center + split_offsets,
+                    s=18,
                     color=color,
-                    alpha=0.48,
-                    edgecolor=color,
-                    linewidth=0.65,
+                    alpha=0.42,
+                    linewidth=0,
                     zorder=2,
                 )
                 ax.errorbar(
                     mean,
                     center,
                     xerr=sample_sd,
-                    fmt="none",
-                    ecolor=INK,
-                    elinewidth=0.75,
+                    fmt="o",
+                    markersize=4.2,
+                    markerfacecolor="white",
+                    markeredgecolor=color,
+                    markeredgewidth=0.8,
+                    ecolor=color,
+                    elinewidth=0.8,
                     capsize=2.0,
-                    capthick=0.75,
                     zorder=4,
                 )
 
@@ -2251,13 +2195,18 @@ def _draw_panel_d_label_transfer(data: pd.DataFrame) -> plt.Figure:
         ax.spines[["top", "right", "left"]].set_visible(False)
         ax.tick_params(axis="y", length=0)
 
-    fig.text(0.012, 0.965, "E", ha="left", va="top", fontsize=11, fontweight="bold")
+    fig.text(0.012, 0.965, "D", ha="left", va="top", fontsize=11, fontweight="bold")
     metric_handles = [
-        Patch(
-            facecolor=color,
-            edgecolor=color,
-            linewidth=0.65,
-            alpha=0.55,
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="-",
+            color=color,
+            markerfacecolor=color,
+            markeredgecolor=INK,
+            markersize=4,
+            linewidth=0.8,
             label=display,
         )
         for _, display, color in PANEL_D_METRICS
@@ -2308,22 +2257,16 @@ def _read_panel_f_assignments(
     required = {"cell_id", "method", "forced_label"}
     missing = sorted(required - set(frame.columns))
     if missing:
-        raise HIHAFigure2Error(
-            f"Panel F assignment table is missing columns {missing}: {path}"
-        )
+        raise HIHAFigure2Error(f"Panel F assignment table is missing columns {missing}: {path}")
     selected = frame.loc[
         frame["method"].astype(str).eq(method),
         ["cell_id", "forced_label"],
     ].copy()
     selected["cell_id"] = selected["cell_id"].astype(str)
     if selected["cell_id"].duplicated().any():
-        raise HIHAFigure2Error(
-            f"Panel F contains duplicate assignment IDs for {method}: {path}"
-        )
+        raise HIHAFigure2Error(f"Panel F contains duplicate assignment IDs for {method}: {path}")
     if set(selected["cell_id"]) != expected_ids:
-        raise HIHAFigure2Error(
-            f"Panel F {method} assignment IDs differ from query truth: {path}"
-        )
+        raise HIHAFigure2Error(f"Panel F {method} assignment IDs differ from query truth: {path}")
     selected["forced_label"] = selected["forced_label"].fillna("").astype(str)
     return selected
 
@@ -2342,9 +2285,7 @@ def _collect_panel_f_label_assignments(
     for endpoint in ENDPOINTS:
         endpoint_rows = seed_rows.loc[seed_rows["held_out_label"].eq(endpoint)]
         selected_ids = set(
-            endpoint_rows.loc[
-                endpoint_rows["method"].ne("uniform_uot"), "run_id"
-            ].astype(str)
+            endpoint_rows.loc[endpoint_rows["method"].ne("uniform_uot"), "run_id"].astype(str)
         )
         if len(selected_ids) != 1:
             raise HIHAFigure2Error(
@@ -2352,14 +2293,11 @@ def _collect_panel_f_label_assignments(
                 f"{sorted(selected_ids)}"
             )
         uniform_ids = set(
-            endpoint_rows.loc[
-                endpoint_rows["method"].eq("uniform_uot"), "run_id"
-            ].astype(str)
+            endpoint_rows.loc[endpoint_rows["method"].eq("uniform_uot"), "run_id"].astype(str)
         )
         if len(uniform_ids) != 1:
             raise HIHAFigure2Error(
-                f"Panel F requires one uniform-UOT run for {endpoint}: "
-                f"{sorted(uniform_ids)}"
+                f"Panel F requires one uniform-UOT run for {endpoint}: {sorted(uniform_ids)}"
             )
         selected_run_id = next(iter(selected_ids))
         uniform_run_id = next(iter(uniform_ids))
@@ -2382,28 +2320,20 @@ def _collect_panel_f_label_assignments(
             }
         )
         reference_path = (
-            selected_root
-            / "benchmark/incomplete_reference/model_visible/target_labels.csv"
+            selected_root / "benchmark/incomplete_reference/model_visible/target_labels.csv"
         )
         reference_labels = set(
-            _read_target_labels(
-                selected_root, "incomplete_reference"
-            )["target_label"].astype(str)
+            _read_target_labels(selected_root, "incomplete_reference")["target_label"].astype(str)
         )
         base = truth.merge(coordinate_frame, on="cell_id", validate="one_to_one")
         base.insert(0, "held_out_label", endpoint)
         base["is_represented_state"] = base["is_shared_state"].astype(bool)
         base["is_held_out_state"] = base["is_absent_state"].astype(bool)
-        if not (
-            base["is_represented_state"] ^ base["is_held_out_state"]
-        ).all():
+        if not (base["is_represented_state"] ^ base["is_held_out_state"]).all():
             raise HIHAFigure2Error(
-                f"Panel F truth does not partition represented and held-out cells: "
-                f"{selected_root}"
+                f"Panel F truth does not partition represented and held-out cells: {selected_root}"
             )
-        represented_truth = set(
-            base.loc[base["is_represented_state"], "true_label"].astype(str)
-        )
+        represented_truth = set(base.loc[base["is_represented_state"], "true_label"].astype(str))
         if represented_truth != reference_labels:
             raise HIHAFigure2Error(
                 f"Panel F represented truth labels differ from reference labels for "
@@ -2425,20 +2355,13 @@ def _collect_panel_f_label_assignments(
         frames.append(truth_frame)
 
         internal_path = (
-            selected_root
-            / "scoring/incomplete_reference"
-            / CANDIDATE_SET
-            / "cell_scores.parquet"
+            selected_root / "scoring/incomplete_reference" / CANDIDATE_SET / "cell_scores.parquet"
         )
         uniform_path = (
-            uniform_root
-            / "scoring/incomplete_reference"
-            / CANDIDATE_SET
-            / "cell_scores.parquet"
+            uniform_root / "scoring/incomplete_reference" / CANDIDATE_SET / "cell_scores.parquet"
         )
         external_path = (
-            selected_root
-            / "scoring/incomplete_reference/external_reference_mapping/"
+            selected_root / "scoring/incomplete_reference/external_reference_mapping/"
             "cell_scores.parquet"
         )
         path_by_method = {
@@ -2448,9 +2371,7 @@ def _collect_panel_f_label_assignments(
             "scmap_cluster": external_path,
             "chetah": external_path,
         }
-        display_by_method = {
-            method: display for method, _, display in PANEL_D_METHODS
-        }
+        display_by_method = {method: display for method, _, display in PANEL_D_METHODS}
         for method, _, _ in PANEL_D_METHODS:
             assignments = _read_panel_f_assignments(
                 path=path_by_method[method],
@@ -2485,9 +2406,7 @@ def _collect_panel_f_label_assignments(
             frames.append(method_frame)
 
             true_labels = method_frame.loc[represented, "true_label"].astype(str)
-            predicted_labels = method_frame.loc[
-                represented, "forced_label"
-            ].astype(str)
+            predicted_labels = method_frame.loc[represented, "forced_label"].astype(str)
             forced_accuracy = float(accuracy_score(true_labels, predicted_labels))
             forced_macro_f1 = float(
                 f1_score(
@@ -2521,9 +2440,7 @@ def _collect_panel_f_label_assignments(
                     "seed": REPRESENTATIVE_SEED,
                     "method": method,
                     "method_display": display_by_method[method],
-                    "run_id": (
-                        uniform_run_id if method == "uniform_uot" else selected_run_id
-                    ),
+                    "run_id": (uniform_run_id if method == "uniform_uot" else selected_run_id),
                     "n_represented": int(represented.sum()),
                     "forced_accuracy": forced_accuracy,
                     "forced_macro_f1": forced_macro_f1,
@@ -2569,15 +2486,9 @@ def _collect_panel_f_label_assignments(
     summary = pd.DataFrame(summary_rows).sort_values(
         ["held_out_label", "method"], ignore_index=True
     )
-    expected_maps = {
-        (endpoint, map_id)
-        for endpoint in ENDPOINTS
-        for map_id, _ in PANEL_F_MAPS
-    }
+    expected_maps = {(endpoint, map_id) for endpoint in ENDPOINTS for map_id, _ in PANEL_F_MAPS}
     observed_maps = set(
-        cells[["held_out_label", "map_id"]].drop_duplicates().itertuples(
-            index=False, name=None
-        )
+        cells[["held_out_label", "map_id"]].drop_duplicates().itertuples(index=False, name=None)
     )
     if observed_maps != expected_maps:
         raise HIHAFigure2Error("Panel F maps differ from the endpoint-map contract")
@@ -2589,7 +2500,7 @@ def _collect_panel_f_label_assignments(
 
 
 def _draw_panel_f_label_assignments(cells: pd.DataFrame) -> plt.Figure:
-    fig, axes = plt.subplots(2, 6, figsize=PANEL_F_SIZE_INCHES)
+    fig, axes = plt.subplots(2, len(PANEL_F_MAPS), figsize=PANEL_F_SIZE_INCHES)
     fig.patch.set_facecolor("white")
     for row, endpoint in enumerate(ENDPOINTS):
         endpoint_cells = cells.loc[cells["held_out_label"].eq(endpoint)]
@@ -2613,18 +2524,12 @@ def _draw_panel_f_label_assignments(cells: pd.DataFrame) -> plt.Figure:
         for column, (map_id, display) in enumerate(PANEL_F_MAPS):
             axis = axes[row, column]
             frame = endpoint_cells.loc[endpoint_cells["map_id"].eq(map_id)]
-            represented = frame.loc[frame["is_represented_state"]].sort_values(
-                "cell_id"
-            )
+            represented = frame.loc[frame["is_represented_state"]].sort_values("cell_id")
             held_out = frame.loc[frame["is_held_out_state"]].sort_values("cell_id")
             colors = represented["displayed_assignment"].map(PANEL_F_LABEL_COLORS)
             if colors.isna().any():
-                unexpected = sorted(
-                    represented.loc[colors.isna(), "displayed_assignment"].unique()
-                )
-                raise HIHAFigure2Error(
-                    f"Panel F has unmapped biological labels: {unexpected}"
-                )
+                unexpected = sorted(represented.loc[colors.isna(), "displayed_assignment"].unique())
+                raise HIHAFigure2Error(f"Panel F has unmapped biological labels: {unexpected}")
             axis.scatter(
                 represented["umap_1"],
                 represented["umap_2"],
@@ -2686,7 +2591,7 @@ def _draw_panel_f_label_assignments(cells: pd.DataFrame) -> plt.Figure:
             markerfacecolor=PANEL_F_HELD_OUT_COLOR,
             markeredgecolor="none",
             markersize=4.8,
-            label="Held-out state (not evaluated)",
+            label="Reference-omitted cells (not evaluated)",
         )
     )
     fig.legend(
@@ -2720,9 +2625,7 @@ def _validate_panel_f_label_assignment_raster(path: Path) -> None:
             )
         aspect = image.width / image.height
         if not 2.10 <= aspect <= 2.30:
-            raise HIHAFigure2Error(
-                f"Unexpected Panel F aspect ratio: {path} has {image.size}"
-            )
+            raise HIHAFigure2Error(f"Unexpected Panel F aspect ratio: {path} has {image.size}")
 
 
 def generate_panel_a(
@@ -2736,10 +2639,7 @@ def generate_panel_a(
     source_root = result_root / "source_data"
     source_root.mkdir(parents=True, exist_ok=True)
 
-    outputs = {
-        suffix: panel_root / f"panel_a.{suffix}"
-        for suffix in ("png", "pdf", "svg")
-    }
+    outputs = {suffix: panel_root / f"panel_a.{suffix}" for suffix in ("png", "pdf", "tiff")}
     source_path = source_root / "panel_a_design.csv"
     manifest_path = result_root / "panel_a_manifest.yaml"
 
@@ -2790,9 +2690,7 @@ def generate_panel_a(
                 "stage": "manuscript-figure",
                 "figure": "HIHA controlled missing-state Figure 2",
                 "panel": "A",
-                "generator": (
-                    "experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"
-                ),
+                "generator": ("experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"),
                 "artifacts": artifacts,
                 "sources": [
                     str(overview_path),
@@ -2829,10 +2727,7 @@ def generate_panel_b(
     source_root = result_root / "source_data"
     source_root.mkdir(parents=True, exist_ok=True)
 
-    outputs = {
-        suffix: panel_root / f"panel_b.{suffix}"
-        for suffix in ("png", "pdf", "svg")
-    }
+    outputs = {suffix: panel_root / f"panel_b.{suffix}" for suffix in ("png", "pdf", "tiff")}
     source_path = source_root / "panel_b_detection.csv"
     manifest_path = result_root / "panel_b_manifest.yaml"
 
@@ -2854,9 +2749,7 @@ def generate_panel_b(
                 "stage": "manuscript-figure",
                 "figure": "HIHA controlled missing-state Figure 2",
                 "panel": "B",
-                "generator": (
-                    "experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"
-                ),
+                "generator": ("experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"),
                 "artifacts": artifacts,
                 "sources": [str(detection_path)],
                 "regeneration_commands": [
@@ -2877,14 +2770,11 @@ def generate_panel_b(
                         for method, score, display in PANEL_B_METHODS
                     ],
                     "method_colors": {
-                        method: METHOD_COLORS[method]
-                        for method, _, _ in PANEL_B_METHODS
+                        method: METHOD_COLORS[method] for method, _, _ in PANEL_B_METHODS
                     },
-                    "method_color_source": (
-                        "experiments/mouse_spleen/generate_figure4_panels.py"
-                    ),
+                    "method_color_source": ("experiments/mouse_spleen/generate_figure4_panels.py"),
                     "metric_artifact_field": "auprc",
-                    "metric_display": "average precision (AP)",
+                    "metric_display": "AP",
                     "interval": "mean_plus_or_minus_sample_sd_ddof1",
                     "prevalence_reference": "mean_across_five_splits",
                     "canvas_inches": list(PANEL_B_SIZE_INCHES),
@@ -2919,7 +2809,7 @@ def _generate_archival_paired_ap_panel(
     archive_root.mkdir(parents=True, exist_ok=True)
     outputs = {
         suffix: archive_root / f"removed_paired_ap_panel.{suffix}"
-        for suffix in ("png", "pdf", "svg")
+        for suffix in ("png", "pdf", "tiff")
     }
     source_path = archive_root / "removed_paired_ap_controls.csv"
     manifest_path = archive_root / "removed_paired_ap_manifest.yaml"
@@ -2942,9 +2832,7 @@ def _generate_archival_paired_ap_panel(
                 "stage": "manuscript-figure",
                 "figure": "HIHA controlled missing-state Figure 2",
                 "panel": "removed-paired-ap",
-                "generator": (
-                    "experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"
-                ),
+                "generator": ("experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"),
                 "artifacts": artifacts,
                 "sources": [str(detection_path)],
                 "regeneration_command": (
@@ -2964,7 +2852,7 @@ def _generate_archival_paired_ap_panel(
                     ],
                     "contrast": "reference_average_precision_minus_comparator",
                     "metric_artifact_field": "auprc",
-                    "metric_display": "average precision (AP)",
+                    "metric_display": "AP",
                     "interval": "mean_plus_or_minus_sample_sd_ddof1",
                     "canvas_inches": list(PANEL_C_SIZE_INCHES),
                     "raster_dpi": PANEL_RASTER_DPI,
@@ -2978,9 +2866,7 @@ def _generate_archival_paired_ap_panel(
     required = [*outputs.values(), source_path, manifest_path]
     for path in required:
         if not path.is_file() or path.stat().st_size == 0:
-            raise HIHAFigure2Error(
-                f"Missing or empty removed paired-AP artifact: {path}"
-            )
+            raise HIHAFigure2Error(f"Missing or empty removed paired-AP artifact: {path}")
     _validate_panel_c_raster(outputs["png"])
     return {**outputs, "source_data": source_path, "manifest": manifest_path}
 
@@ -3000,10 +2886,7 @@ def generate_panel_c(
     source_root = result_root / "source_data"
     source_root.mkdir(parents=True, exist_ok=True)
 
-    outputs = {
-        suffix: panel_root / f"panel_c.{suffix}"
-        for suffix in ("png", "pdf", "svg")
-    }
+    outputs = {suffix: panel_root / f"panel_c.{suffix}" for suffix in ("png", "pdf", "tiff")}
     cell_path = source_root / "panel_c_paired_cells.parquet"
     summary_path = source_root / "panel_c_deficit_by_seed.csv"
     specificity_path = source_root / "panel_c_restoration_by_seed.csv"
@@ -3035,9 +2918,7 @@ def generate_panel_c(
                 "stage": "manuscript-figure",
                 "figure": "HIHA controlled missing-state Figure 2",
                 "panel": "C",
-                "generator": (
-                    "experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"
-                ),
+                "generator": ("experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"),
                 "artifacts": artifacts,
                 "sources": source_paths,
                 "parameters": {
@@ -3055,9 +2936,7 @@ def generate_panel_c(
                     "restoration_specificity": (
                         "held_out_delta_median_u_minus_control_delta_median_u"
                     ),
-                    "destination_summary": (
-                        "median_conditional_reference_label_probability"
-                    ),
+                    "destination_summary": ("median_conditional_reference_label_probability"),
                     "destination_axis_limits": [0.0, 1.0],
                     "interval": "mean_plus_or_minus_sample_sd_ddof1",
                     "connect_split_points_across_rows": False,
@@ -3105,10 +2984,7 @@ def generate_panel_e(
     source_root = result_root / "source_data"
     source_root.mkdir(parents=True, exist_ok=True)
 
-    outputs = {
-        suffix: panel_root / f"panel_e.{suffix}"
-        for suffix in ("png", "pdf", "svg")
-    }
+    outputs = {suffix: panel_root / f"panel_e.{suffix}" for suffix in ("png", "pdf", "tiff")}
     cell_path = source_root / "panel_e_umap_cells.csv"
     summary_path = source_root / "panel_e_summary.csv"
     manifest_path = result_root / "panel_e_manifest.yaml"
@@ -3132,9 +3008,7 @@ def generate_panel_e(
                 "stage": "manuscript-figure",
                 "figure": "HIHA controlled missing-state Figure 2",
                 "panel": "E",
-                "generator": (
-                    "experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"
-                ),
+                "generator": ("experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"),
                 "artifacts": artifacts,
                 "sources": source_paths,
                 "parameters": {
@@ -3151,8 +3025,7 @@ def generate_panel_e(
                         for map_id, score, display in PANEL_E_MAPS
                     ],
                     "method_colors": {
-                        method: METHOD_COLORS[method]
-                        for method, _, _ in PANEL_E_METHODS
+                        method: METHOD_COLORS[method] for method, _, _ in PANEL_E_METHODS
                     },
                     "truth_color": PANEL_E_TRUTH_COLOR,
                     "eligible_unselected_color": PANEL_E_ELIGIBLE_GRAY,
@@ -3206,10 +3079,7 @@ def generate_panel_d(
     source_root = result_root / "source_data"
     source_root.mkdir(parents=True, exist_ok=True)
 
-    outputs = {
-        suffix: panel_root / f"panel_d.{suffix}"
-        for suffix in ("png", "pdf", "svg")
-    }
+    outputs = {suffix: panel_root / f"panel_d.{suffix}" for suffix in ("png", "pdf", "tiff")}
     source_path = source_root / "panel_d_label_transfer.csv"
     manifest_path = result_root / "panel_d_manifest.yaml"
 
@@ -3231,9 +3101,7 @@ def generate_panel_d(
                 "stage": "manuscript-figure",
                 "figure": "HIHA controlled missing-state Figure 2",
                 "panel": "D",
-                "generator": (
-                    "experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"
-                ),
+                "generator": ("experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"),
                 "artifacts": artifacts,
                 "sources": [str(label_transfer_path)],
                 "regeneration_command": (
@@ -3258,19 +3126,14 @@ def generate_panel_d(
                         "forced_accuracy",
                     ],
                     "encoding": (
-                        "horizontal_two_grouped_bars_per_method_and_endpoint"
+                        "five_donor_split_points_plus_arithmetic_mean_and_sample_sd_interval"
                     ),
-                    "metric_colors": {
-                        metric: color
-                        for metric, _, color in PANEL_D_METRICS
-                    },
-                    "split_points": "not_displayed",
+                    "metric_colors": {metric: color for metric, _, color in PANEL_D_METRICS},
+                    "split_points": "five_donor_split_values",
                     "interval": "mean_plus_or_minus_sample_sd_ddof1",
-                    "mean_marker": False,
-                    "metric_legend": "above_endpoint_facets",
+                    "mean_marker": True,
+                    "metric_legend": "point_and_interval",
                     "axis_limits": list(PANEL_D_LIM),
-                    "bar_baseline": PANEL_D_LIM[0],
-                    "bar_baseline_is_truncated": True,
                     "disposition": "main_figure_panel",
                     "canvas_inches": list(PANEL_D_SIZE_INCHES),
                     "raster_dpi": PANEL_RASTER_DPI,
@@ -3304,10 +3167,7 @@ def generate_panel_f(
     source_root = result_root / "source_data"
     source_root.mkdir(parents=True, exist_ok=True)
 
-    outputs = {
-        suffix: panel_root / f"panel_f.{suffix}"
-        for suffix in ("png", "pdf", "svg")
-    }
+    outputs = {suffix: panel_root / f"panel_f.{suffix}" for suffix in ("png", "pdf", "tiff")}
     cell_path = source_root / "panel_f_label_assignment_cells.csv"
     summary_path = source_root / "panel_f_label_assignment_summary.csv"
     manifest_path = result_root / "panel_f_manifest.yaml"
@@ -3336,9 +3196,7 @@ def generate_panel_f(
                 "stage": "manuscript-figure",
                 "figure": "HIHA controlled missing-state Figure 2",
                 "panel": "F",
-                "generator": (
-                    "experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"
-                ),
+                "generator": ("experiments/missing_celltype/generate_hiha_dc_figure2_panels.py"),
                 "artifacts": artifacts,
                 "sources": source_paths,
                 "parameters": {
@@ -3347,8 +3205,7 @@ def generate_panel_f(
                     "condition": "incomplete_reference",
                     "evaluation_subset": "represented_AIFI_L3_states",
                     "maps": [
-                        {"map_id": map_id, "display": display}
-                        for map_id, display in PANEL_F_MAPS
+                        {"map_id": map_id, "display": display} for map_id, display in PANEL_F_MAPS
                     ],
                     "biological_label_colors": PANEL_F_LABEL_COLORS,
                     "held_out_color": PANEL_F_HELD_OUT_COLOR,
@@ -3366,9 +3223,7 @@ def generate_panel_f(
                     "layout": "two_endpoint_rows_by_truth_plus_five_method_columns",
                     "legend_rows": 1,
                     "endpoint_label_y": list(PANEL_F_ENDPOINT_LABEL_Y),
-                    "metric_cross_check": (
-                        "seed1_forced_accuracy_and_macro_f1_reproduce_panel_d"
-                    ),
+                    "metric_cross_check": ("seed1_forced_accuracy_and_macro_f1_reproduce_panel_d"),
                     "interpretation": (
                         "descriptive_spatial_view_not_independent_performance_evidence"
                     ),

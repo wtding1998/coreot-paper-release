@@ -3,21 +3,27 @@ from __future__ import annotations
 import argparse
 import copy
 from pathlib import Path
+import sys
 from typing import Sequence
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score
 import yaml
 
-from coreot.artifacts.hashes import sha256_file
-from coreot.config.load import load_yaml
-from coreot.evaluation.metrics import safe_auprc, safe_auroc, safe_median
-from experiments.mouse_spleen.pipeline import (
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from coreot.artifacts.hashes import sha256_file  # noqa: E402
+from coreot.config.load import load_yaml  # noqa: E402
+from coreot.evaluation.metrics import safe_auprc, safe_auroc, safe_median  # noqa: E402
+from experiments.mouse_spleen.pipeline import (  # noqa: E402
     _natural_endpoint_manifests,
     _run_natural_constant_tau_sensitivity,
     _run_natural_match_only_sensitivity_variant,
     _write_fixed_natural_source_priors,
+    fixed_true_label_macro_f1,
 )
 
 
@@ -168,13 +174,8 @@ def _canonical_f2_row(
                         shared["forced_label"].fillna("").astype(str),
                     )
                 ),
-                "shared_forced_macro_f1": float(
-                    f1_score(
-                        shared["true_label"].astype(str),
-                        shared["forced_label"].fillna("").astype(str),
-                        average="macro",
-                        zero_division=0,
-                    )
+                "shared_forced_macro_f1": fixed_true_label_macro_f1(
+                    shared["true_label"], shared["forced_label"].fillna("")
                 ),
                 "rho_recipe": str(source_priors["rho_recipe"].iloc[0]),
                 "source_priors_sha256": source_hash,
@@ -257,13 +258,89 @@ def _write_result(
     return table_path
 
 
+def _run_f2_sensitivity(
+    config: dict[str, object],
+    *,
+    output_root: Path,
+    retain_fit_artifacts: bool,
+) -> Path:
+    f2_root = (
+        output_root
+        / "natural_mismatch/sensitivity/figure4_full_tau_alpha_40_tau_target_8"
+    )
+    f2_checkpoint = f2_root / "checkpoints/proliferating.csv"
+    if not f2_checkpoint.is_file():
+        canonical = _canonical_f2_row(
+            config, output_root=output_root, sensitivity_root=f2_root
+        )
+        f2_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        canonical.to_csv(f2_checkpoint, index=False)
+    pairs = [
+        (tau_min, tau_max)
+        for tau_min in F2_TAU_VALUES
+        for tau_max in F2_TAU_VALUES
+        if tau_min <= tau_max
+    ]
+    canonical_manifest = _endpoint_manifest(config)
+    canonical_candidate = str(canonical_manifest["metadata"]["candidate_set"])
+    canonical_run_root = Path(str(canonical_manifest["artifacts"]["run_root"]))
+    canonical_fit_root = (
+        canonical_run_root
+        / f"transport/natural_mismatch/{canonical_candidate}/coreot_full"
+    )
+    _run_natural_match_only_sensitivity_variant(
+        config,
+        root_name=f2_root.name,
+        tau_target_override=TAU_TARGET,
+        max_iterations_override=MAX_ITERATIONS,
+        method_name="coreot_full",
+        alpha=ALPHA_ADAPTIVE,
+        fixed_default_rho=True,
+        pairs_override=pairs,
+        endpoints={ENDPOINT},
+        retain_fit_artifacts=retain_fit_artifacts,
+        retention_exempt_fit_roots=(
+            {(3.0, 5.0): canonical_fit_root} if retain_fit_artifacts else None
+        ),
+    )
+    f2 = _standardize_f2(pd.read_csv(f2_checkpoint))
+    if len(f2) != len(pairs) or int(f2["is_canonical"].sum()) != 1:
+        raise ValueError("F2 checkpoint is incomplete or lacks a unique canonical cell")
+    return _write_result(
+        root=f2_root,
+        frame=f2,
+        stage="run_mouse_spleen_figure4_f2_sensitivity",
+        metadata={
+            "endpoint": ENDPOINT,
+            "tau_values": F2_TAU_VALUES,
+            "alpha": ALPHA_ADAPTIVE,
+            "tau_target": TAU_TARGET,
+            "canonical": [3.0, 5.0, TAU_TARGET, ALPHA_ADAPTIVE],
+            "canonical_reused_from_main_run": True,
+            "nonconverged_policy": "retained_with_flag_and_masked_in_figure",
+        },
+    )
+
+
 def run_figure4_sensitivity(
     config_path: Path,
     *,
     retain_f2_fit_artifacts: bool = False,
-) -> tuple[Path, Path]:
+    panel: str = "both",
+) -> tuple[Path, ...]:
     config = load_yaml(config_path)
     output_root = Path(str(config["experiment"]["output_dir"]))
+
+    if panel == "f2":
+        return (
+            _run_f2_sensitivity(
+                config,
+                output_root=output_root,
+                retain_fit_artifacts=retain_f2_fit_artifacts,
+            ),
+        )
+    if panel != "both":
+        raise ValueError(f"Unknown Figure 4 sensitivity panel: {panel}")
 
     f1_root = (
         output_root
@@ -305,63 +382,10 @@ def run_figure4_sensitivity(
         },
     )
 
-    f2_root = (
-        output_root
-        / "natural_mismatch/sensitivity/figure4_full_tau_alpha_40_tau_target_8"
-    )
-    f2_checkpoint = f2_root / "checkpoints/proliferating.csv"
-    if not f2_checkpoint.is_file():
-        canonical = _canonical_f2_row(
-            config, output_root=output_root, sensitivity_root=f2_root
-        )
-        f2_checkpoint.parent.mkdir(parents=True, exist_ok=True)
-        canonical.to_csv(f2_checkpoint, index=False)
-    pairs = [
-        (tau_min, tau_max)
-        for tau_min in F2_TAU_VALUES
-        for tau_max in F2_TAU_VALUES
-        if tau_min <= tau_max
-    ]
-    canonical_manifest = _endpoint_manifest(config)
-    canonical_candidate = str(canonical_manifest["metadata"]["candidate_set"])
-    canonical_run_root = Path(str(canonical_manifest["artifacts"]["run_root"]))
-    canonical_fit_root = (
-        canonical_run_root
-        / f"transport/natural_mismatch/{canonical_candidate}/coreot_full"
-    )
-    _run_natural_match_only_sensitivity_variant(
+    f2_path = _run_f2_sensitivity(
         config,
-        root_name=f2_root.name,
-        tau_target_override=TAU_TARGET,
-        max_iterations_override=MAX_ITERATIONS,
-        method_name="coreot_full",
-        alpha=ALPHA_ADAPTIVE,
-        fixed_default_rho=True,
-        pairs_override=pairs,
-        endpoints={ENDPOINT},
+        output_root=output_root,
         retain_fit_artifacts=retain_f2_fit_artifacts,
-        retention_exempt_fit_roots=(
-            {(3.0, 5.0): canonical_fit_root}
-            if retain_f2_fit_artifacts
-            else None
-        ),
-    )
-    f2 = _standardize_f2(pd.read_csv(f2_checkpoint))
-    if len(f2) != len(pairs) or int(f2["is_canonical"].sum()) != 1:
-        raise ValueError("F2 checkpoint is incomplete or lacks a unique canonical cell")
-    f2_path = _write_result(
-        root=f2_root,
-        frame=f2,
-        stage="run_mouse_spleen_figure4_f2_sensitivity",
-        metadata={
-            "endpoint": ENDPOINT,
-            "tau_values": F2_TAU_VALUES,
-            "alpha": ALPHA_ADAPTIVE,
-            "tau_target": TAU_TARGET,
-            "canonical": [3.0, 5.0, TAU_TARGET, ALPHA_ADAPTIVE],
-            "canonical_reused_from_main_run": True,
-            "nonconverged_policy": "retained_with_flag_and_masked_in_figure",
-        },
     )
     return f1_path, f2_path
 
@@ -374,6 +398,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=Path("experiments/mouse_spleen/configs/mouse_spleen_core_ot.yaml"),
     )
     parser.add_argument(
+        "--panel",
+        choices=("both", "f2"),
+        default="both",
+        help="Run both legacy panels or only retained F2 parameter sensitivity.",
+    )
+    parser.add_argument(
         "--retain-f2-fit-artifacts",
         action="store_true",
         help="Retain complete noncanonical F2 transport artifacts and resume only complete fits.",
@@ -382,6 +412,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for path in run_figure4_sensitivity(
         args.config,
         retain_f2_fit_artifacts=args.retain_f2_fit_artifacts,
+        panel=args.panel,
     ):
         print(path)
     return 0

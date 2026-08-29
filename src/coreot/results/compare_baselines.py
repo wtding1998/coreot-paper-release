@@ -27,7 +27,6 @@ from coreot.results.main_grid import (
 COMPARE_INTERNAL_METHODS: tuple[str, ...] = (
     "prior_only",
     "nn",
-    "balanced_ot",
     "uniform_uot",
     "coreot_full",
     "coreot_match_only",
@@ -624,7 +623,6 @@ def _ordered_method_keys(
             (
                 "prior_only",
                 "nn",
-                "balanced_ot",
                 "uniform_uot",
                 "coreot_full",
                 "coreot_match_only",

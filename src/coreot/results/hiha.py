@@ -18,7 +18,6 @@ EXPECTED_INPUT_SHA256 = "64b48e211170ac921165e4402300dce0ffdf5f6fae559ec1d6b890d
 SCORES = {
     "prior_only": ("prior_risk",),
     "nn": ("nn_distance",),
-    "balanced_ot": ("label_uncertainty",),
     "uniform_uot": ("u",),
     "coreot_full": ("u",),
     "seurat_anchor": ("u",),
@@ -32,7 +31,6 @@ PRIMARY = {method: scores[-1] for method, scores in SCORES.items()}
 METHOD_DISPLAY = {
     "coreot_full": "CoRe-OT",
     "uniform_uot": "Uniform UOT",
-    "balanced_ot": "Balanced OT",
     "nn": "Nearest neighbor",
     "prior_only": "Prior only",
     "seurat_anchor": "Seurat",

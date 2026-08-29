@@ -11,6 +11,7 @@ import yaml
 
 from coreot.artifacts.hashes import sha256_file
 from experiments.mouse_spleen import pipeline
+from experiments.mouse_spleen import run_figure4_sensitivity as figure4_sensitivity
 
 
 def _exercise_variant(
@@ -247,3 +248,33 @@ def test_full_tau_variant_manifest_binds_candidate_edges(
         "path": str(candidate_path),
         "sha256": sha256_file(candidate_path),
     }
+
+
+def test_figure4_f2_selector_skips_unrelated_f1_grid(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"experiment": {"output_dir": str(tmp_path / "output")}}),
+        encoding="utf-8",
+    )
+    expected = tmp_path / "f2.csv"
+    calls: list[bool] = []
+
+    def run_f2(config, *, output_root: Path, retain_fit_artifacts: bool) -> Path:
+        assert config["experiment"]["output_dir"] == str(tmp_path / "output")
+        assert output_root == tmp_path / "output"
+        calls.append(retain_fit_artifacts)
+        return expected
+
+    monkeypatch.setattr(figure4_sensitivity, "_run_f2_sensitivity", run_f2)
+
+    result = figure4_sensitivity.run_figure4_sensitivity(
+        config_path,
+        retain_f2_fit_artifacts=True,
+        panel="f2",
+    )
+
+    assert result == (expected,)
+    assert calls == [True]

@@ -75,6 +75,7 @@ def test_run_grid_retains_complete_fit_artifacts_and_resumes(
         }
     )
     assert settings.retained_fit_variants == ("compatibility_only",)
+    assert set(settings.execute_variants) == {"compatibility_only", "match_only"}
     arguments = {
         "variant": "compatibility_only",
         "combinations": [(4.0, 0.0)],
@@ -121,3 +122,27 @@ def test_run_grid_retains_complete_fit_artifacts_and_resumes(
     component_ablation._run_grid(**arguments)
 
     assert calls == [fit_root]
+
+
+def test_component_ablation_execution_variants_can_select_compatibility_only() -> None:
+    settings = component_ablation._settings(
+        {
+            "experiments": {
+                "natural_mismatch": {
+                    "component_ablation": {
+                        "endpoint": "Proliferating",
+                        "match_tau_min_values": [3.0],
+                        "match_tau_max_values": [5.0],
+                        "compatibility_tau_values": [1.0, 2.0],
+                        "alpha_values": [0.0, 1.0],
+                        "tau_target": 8.0,
+                        "max_iterations": 5000,
+                        "retain_fit_artifacts": ["compatibility_only"],
+                        "execute_variants": ["compatibility_only"],
+                    }
+                }
+            }
+        }
+    )
+
+    assert settings.execute_variants == ("compatibility_only",)

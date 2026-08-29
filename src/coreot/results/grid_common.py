@@ -20,7 +20,6 @@ STAGE = "manuscript-results"
 
 PRIMARY_SCORE_BY_METHOD: dict[str, str] = {
     "nn": "nn_distance",
-    "balanced_ot": "label_uncertainty",
     "uniform_uot": "u",
     "coreot_constant_tau": "u",
     "coreot_full": "u",
@@ -39,7 +38,6 @@ EXTERNAL_PRIMARY_SCORE_BY_METHOD: dict[str, str] = {
 
 METHOD_GROUP_BY_METHOD: dict[str, str] = {
     "nn": "baseline",
-    "balanced_ot": "baseline",
     "uniform_uot": "baseline",
     "coreot_constant_tau": "ablation",
     "coreot_full": "coreot",
@@ -60,7 +58,6 @@ LABEL_TRANSFER_METHODS = tuple(
 DISPLAY_NAME_BY_METHOD: dict[str, str] = {
     "prior_only": "Prior-only",
     "nn": "Nearest neighbor",
-    "balanced_ot": "Balanced OT",
     "uniform_uot": "Uniform UOT",
     "coreot_constant_tau": "Constant-tau CoRe-OT",
     "coreot_full": "CoRe-OT",
@@ -76,7 +73,6 @@ DISPLAY_NAME_BY_METHOD: dict[str, str] = {
 TABLE_ROW_ORDER: tuple[str, ...] = (
     "prior_only",
     "nn",
-    "balanced_ot",
     "uniform_uot",
     "coreot_constant_tau",
     "coreot_full",

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 from pathlib import Path
 import shutil
 import time
@@ -61,6 +60,7 @@ class ComponentAblationSettings:
     tau_target: float
     max_iterations: int
     retained_fit_variants: tuple[str, ...]
+    execute_variants: tuple[str, ...]
 
 
 def _settings(config: dict[str, Any]) -> ComponentAblationSettings:
@@ -89,6 +89,12 @@ def _settings(config: dict[str, Any]) -> ComponentAblationSettings:
     retained_fit_variants = tuple(
         sorted({str(value) for value in retained_fit_variants_raw})
     )
+    execute_variants_raw = ablation.get("execute_variants", tuple(RETAINABLE_VARIANTS))
+    if not isinstance(execute_variants_raw, (list, tuple)):
+        raise MouseSpleenConfigError(
+            "Component-ablation execute_variants must be a list of variant names"
+        )
+    execute_variants = tuple(dict.fromkeys(str(value) for value in execute_variants_raw))
     unknown_retained_variants = sorted(
         set(retained_fit_variants) - RETAINABLE_VARIANTS
     )
@@ -96,6 +102,12 @@ def _settings(config: dict[str, Any]) -> ComponentAblationSettings:
         raise MouseSpleenConfigError(
             "Component-ablation retain_fit_artifacts contains unknown variants: "
             f"{unknown_retained_variants}"
+        )
+    unknown_execute_variants = sorted(set(execute_variants) - RETAINABLE_VARIANTS)
+    if not execute_variants or unknown_execute_variants:
+        raise MouseSpleenConfigError(
+            "Component-ablation execute_variants must contain known variants: "
+            f"{unknown_execute_variants}"
         )
     if endpoint != "Proliferating":
         raise MouseSpleenConfigError(
@@ -130,6 +142,7 @@ def _settings(config: dict[str, Any]) -> ComponentAblationSettings:
         tau_target=tau_target,
         max_iterations=max_iterations,
         retained_fit_variants=retained_fit_variants,
+        execute_variants=execute_variants,
     )
 
 
@@ -415,53 +428,56 @@ def run_component_ablation(config: dict[str, Any]):
     compatibility_pairs = [
         (tau, alpha) for tau in settings.compatibility_tau_values for alpha in settings.alpha_values
     ]
-    match_checkpoint = _run_grid(
-        variant="match_only",
-        combinations=match_pairs,
-        parameter_names=("tau_min", "tau_max"),
-        method_name="coreot_match_only",
-        runner=_run_coreot_match_only,
-        root=root,
-        condition=condition,
-        candidate=candidate,
-        run_root=run_root,
-        candidates=candidates,
-        source_priors=source_priors,
-        target_priors=target_priors,
-        truth=truth,
-        settings=settings,
-        transport=transport,
-        source_priors_hash=source_hash,
-        candidate_edges_hash=candidate_hash,
-        retain_fit_artifacts="match_only" in settings.retained_fit_variants,
-    )
-    compatibility_checkpoint = _run_grid(
-        variant="compatibility_only",
-        combinations=compatibility_pairs,
-        parameter_names=("tau_source", "alpha"),
-        method_name="coreot_constant_tau",
-        runner=_run_coreot_constant_tau,
-        root=root,
-        condition=condition,
-        candidate=candidate,
-        run_root=run_root,
-        candidates=candidates,
-        source_priors=source_priors,
-        target_priors=target_priors,
-        truth=truth,
-        settings=settings,
-        transport=transport,
-        source_priors_hash=source_hash,
-        candidate_edges_hash=candidate_hash,
-        retain_fit_artifacts="compatibility_only" in settings.retained_fit_variants,
-    )
+    checkpoints: dict[str, Path] = {}
+    if "match_only" in settings.execute_variants:
+        checkpoints["match_only"] = _run_grid(
+            variant="match_only",
+            combinations=match_pairs,
+            parameter_names=("tau_min", "tau_max"),
+            method_name="coreot_match_only",
+            runner=_run_coreot_match_only,
+            root=root,
+            condition=condition,
+            candidate=candidate,
+            run_root=run_root,
+            candidates=candidates,
+            source_priors=source_priors,
+            target_priors=target_priors,
+            truth=truth,
+            settings=settings,
+            transport=transport,
+            source_priors_hash=source_hash,
+            candidate_edges_hash=candidate_hash,
+            retain_fit_artifacts="match_only" in settings.retained_fit_variants,
+        )
+    if "compatibility_only" in settings.execute_variants:
+        checkpoints["compatibility_only"] = _run_grid(
+            variant="compatibility_only",
+            combinations=compatibility_pairs,
+            parameter_names=("tau_source", "alpha"),
+            method_name="coreot_constant_tau",
+            runner=_run_coreot_constant_tau,
+            root=root,
+            condition=condition,
+            candidate=candidate,
+            run_root=run_root,
+            candidates=candidates,
+            source_priors=source_priors,
+            target_priors=target_priors,
+            truth=truth,
+            settings=settings,
+            transport=transport,
+            source_priors_hash=source_hash,
+            candidate_edges_hash=candidate_hash,
+            retain_fit_artifacts="compatibility_only" in settings.retained_fit_variants,
+        )
     tmp_root = root / "tmp"
     if tmp_root.is_dir() and not any(tmp_root.rglob("*")):
         shutil.rmtree(tmp_root)
     manifest_path = root / "run_manifest.yaml"
     artifacts = {
-        "match_only_checkpoint": match_checkpoint,
-        "compatibility_only_checkpoint": compatibility_checkpoint,
+        f"{variant}_checkpoint": checkpoint
+        for variant, checkpoint in checkpoints.items()
     }
     for variant in settings.retained_fit_variants:
         artifacts[f"{variant}_fit_root"] = root / "fits" / variant
@@ -482,6 +498,7 @@ def run_component_ablation(config: dict[str, Any]):
                 "n_compatibility_only_expected": len(compatibility_pairs),
                 "checkpointed": True,
                 "retained_fit_variants": list(settings.retained_fit_variants),
+                "execute_variants": list(settings.execute_variants),
                 "source_priors_sha256": source_hash,
                 "candidate_edges_sha256": candidate_hash,
             },
@@ -580,84 +597,6 @@ def _plot_variant(
     plt.close(figure)
 
 
-def _markdown_table(frame: pd.DataFrame, parameters: tuple[str, str]) -> str:
-    columns = [
-        *parameters,
-        "converged",
-        "n_iterations",
-        *[metric for metric, _ in MANUSCRIPT_METRICS],
-    ]
-    labels = {
-        "tau_min": "Tau min",
-        "tau_max": "Tau max",
-        "tau_source": "Tau source",
-        "alpha": "Alpha",
-        "converged": "Converged",
-        "n_iterations": "Iterations",
-        **dict(MANUSCRIPT_METRICS),
-    }
-    lines = [
-        "| " + " | ".join(labels[column] for column in columns) + " |",
-        "| " + " | ".join("---" for _ in columns) + " |",
-    ]
-    for row in frame.loc[:, columns].itertuples(index=False, name=None):
-        rendered: list[str] = []
-        for column, value in zip(columns, row, strict=True):
-            if column == "converged":
-                rendered.append("yes" if bool(value) else "no")
-            elif column == "n_iterations":
-                rendered.append(str(int(value)))
-            elif column in parameters:
-                rendered.append(f"{float(value):g}")
-            else:
-                rendered.append(f"{float(value):.3f}")
-        lines.append("| " + " | ".join(rendered) + " |")
-    return "\n".join(lines)
-
-
-def _write_report(
-    *,
-    frame: pd.DataFrame,
-    variant: str,
-    table_path: Path,
-    figure_path: Path,
-    report_path: Path,
-    settings: ComponentAblationSettings,
-) -> None:
-    if variant == "match_only":
-        title = "Heterogeneous-query-penalty sensitivity at $\\alpha=0$"
-        parameters = ("tau_min", "tau_max")
-        definition = (
-            "Compatibility is disabled with $\\alpha=0$; matchability-informed "
-            "source penalties vary over the rectangular "
-            "$(\\tau_{\\min},\\tau_{\\max})$ grid."
-        )
-    else:
-        title = "Constant-$\\tau_q$ compatibility sensitivity"
-        parameters = ("tau_source", "alpha")
-        definition = (
-            "Cell-specific matchability heterogeneity is removed by a constant source "
-            "penalty; $(\\tau_{\\mathrm{source}},\\alpha)$ varies over the rectangular grid."
-        )
-    content = f"""# {title}: Proliferating component-ablation results
-
-{definition} The target penalty is fixed at $\\tau_{{\\mathrm{{target}}}}={settings.tau_target:g}$. All cells report descriptive point estimates from the terminal solver output. A red `×` in the figure marks iteration-cap termination; such values are not converged solutions.
-
-The figure and manuscript-facing table report $u$-based AUROC and
-AP, forced represented-state accuracy, and forced represented-state macro-F1.
-Abstention-dependent outcomes are omitted because this natural-mismatch
-experiment has no matched full-reference control for threshold calibration.
-
-![{title} heatmaps]({os.path.relpath(figure_path, start=report_path.parent)})
-
-Full-precision source: [{table_path.name}]({os.path.relpath(table_path, start=report_path.parent)}).
-
-{_markdown_table(frame, parameters)}
-"""
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(content, encoding="utf-8")
-
-
 def aggregate_component_ablation(config: dict[str, Any]):
     from experiments.mouse_spleen.pipeline import StageResult, _mapping, _string
 
@@ -681,15 +620,7 @@ def aggregate_component_ablation(config: dict[str, Any]):
     limits = _metric_limits((match, compatibility))
     docs_figure_root = docs_root / "figs"
     docs_figure_root.mkdir(parents=True, exist_ok=True)
-    match_figure = docs_figure_root / "manuscript_fig_mouse_spleen_proliferating_match_only.png"
     compatibility_figure = docs_figure_root / "manuscript_fig_mouse_spleen_component_minus_m.png"
-    _plot_variant(
-        frame=match,
-        variant="match_only",
-        settings=settings,
-        limits=limits,
-        output_path=match_figure,
-    )
     _plot_variant(
         frame=compatibility,
         variant="compatibility_only",
@@ -697,34 +628,11 @@ def aggregate_component_ablation(config: dict[str, Any]):
         limits=limits,
         output_path=compatibility_figure,
     )
-    match_report = docs_root / "manuscript_supp_mouse_spleen_proliferating_match_only.md"
-    compatibility_report = (
-        docs_root / "manuscript_supp_mouse_spleen_proliferating_compatibility_only.md"
-    )
-    _write_report(
-        frame=match,
-        variant="match_only",
-        table_path=match_path,
-        figure_path=match_figure,
-        report_path=match_report,
-        settings=settings,
-    )
-    _write_report(
-        frame=compatibility,
-        variant="compatibility_only",
-        table_path=compatibility_path,
-        figure_path=compatibility_figure,
-        report_path=compatibility_report,
-        settings=settings,
-    )
     artifacts = {
         "match_only_metrics": match_path,
         "compatibility_only_metrics": compatibility_path,
         "combined_metrics": combined_path,
-        "match_only_figure": match_figure,
         "compatibility_only_figure": compatibility_figure,
-        "match_only_report": match_report,
-        "compatibility_only_report": compatibility_report,
     }
     manifest_path = run_result.root / "manifest.yaml"
     write_manifest(

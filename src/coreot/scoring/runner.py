@@ -16,6 +16,7 @@ from coreot.data.schemas import (
     BROAD_ANCHOR_PRIORS_COLUMNS,
     CELL_SCORES_COLUMNS,
     CELL_TRANSPORT_SCORES_COLUMNS,
+    INITIAL_PRIORS_COLUMNS,
     MODEL_VISIBLE_CELLS_COLUMNS,
     PRIOR_ONLY_SCORES_COLUMNS,
 )
@@ -72,6 +73,7 @@ def run_scoring(config_path: str | Path) -> ScoringResult:
                 condition,
                 candidate_set,
                 methods,
+                conditions,
                 thresholds or {},
                 prior_adjustment,
             )
@@ -90,6 +92,7 @@ def _score_candidate_set(
     condition: str,
     candidate_set: str,
     methods: tuple[object, ...],
+    conditions: tuple[object, ...],
     thresholds: dict[str, Any],
     prior_adjustment: dict[str, Any],
 ) -> None:
@@ -128,6 +131,7 @@ def _score_candidate_set(
                 run_root=run_root,
                 candidate_set=candidate_set,
                 method=method_name,
+                declared_conditions=conditions,
                 thresholds=thresholds,
             )
             frame = _score_transport_scores(
@@ -188,7 +192,7 @@ def _score_candidate_set(
             metadata={
                 "condition": condition,
                 "candidate_set": candidate_set,
-                "threshold_mode": "full_reference_quantile" if "theta_u" in thresholds else "placeholder_no_abstention",
+                "threshold_mode": _threshold_mode(thresholds, conditions),
                 "thresholds": thresholds,
                 "prior_adjustment": _prior_adjustment_manifest_metadata(
                     prior_adjustment, prior_adjustment_metadata
@@ -203,11 +207,34 @@ def _read_prior_risk(run_root: Path, condition: str, candidate_set: str) -> pd.D
         run_root / "transport" / condition / candidate_set / "prior_only" / "cell_transport_scores.parquet"
     )
     validate_stage_can_read(prior_only_path, STAGE)
-    if not prior_only_path.is_file():
-        raise FileNotFoundError(f"Required prior-only scoring input does not exist: {prior_only_path}")
-    prior_only = pd.read_parquet(prior_only_path)
-    validate_required_columns(prior_only, PRIOR_ONLY_SCORES_COLUMNS, str(prior_only_path))
-    return prior_only.loc[:, ["cell_id", "prior_risk"]]
+    if prior_only_path.is_file():
+        prior_only = pd.read_parquet(prior_only_path)
+        validate_required_columns(prior_only, PRIOR_ONLY_SCORES_COLUMNS, str(prior_only_path))
+        return prior_only.loc[:, ["cell_id", "prior_risk"]]
+
+    model_visible = run_root / "benchmark" / condition / "model_visible"
+    initial_priors_path = model_visible / "initial_priors.csv"
+    cells_path = model_visible / "cells.csv"
+    for path in (initial_priors_path, cells_path):
+        validate_stage_can_read(path, STAGE)
+        if not path.is_file():
+            raise FileNotFoundError(f"Required scoring prior input does not exist: {path}")
+    initial_priors = pd.read_csv(initial_priors_path)
+    cells = pd.read_csv(cells_path)
+    validate_required_columns(initial_priors, INITIAL_PRIORS_COLUMNS, str(initial_priors_path))
+    validate_required_columns(cells, MODEL_VISIBLE_CELLS_COLUMNS, str(cells_path))
+    query_ids = cells.loc[cells["domain"].astype(str).eq("query"), ["cell_id"]].copy()
+    query_ids["cell_id"] = query_ids["cell_id"].astype(str)
+    initial_priors["cell_id"] = initial_priors["cell_id"].astype(str)
+    prior_risk = query_ids.merge(
+        initial_priors.loc[:, ["cell_id", "prior_risk"]],
+        on="cell_id",
+        how="left",
+        validate="one_to_one",
+    )
+    if prior_risk["prior_risk"].isna().any():
+        raise ScoringRunnerError("initial_priors.csv must contain prior_risk for every source cell")
+    return prior_risk
 
 
 def _read_source_fold_metadata(run_root: Path, condition: str) -> pd.DataFrame:
@@ -408,6 +435,7 @@ def _u_threshold(
     run_root: Path,
     candidate_set: str,
     method: str,
+    declared_conditions: tuple[object, ...],
     thresholds: dict[str, Any],
 ) -> float | None:
     theta_config = thresholds.get("theta_u")
@@ -416,6 +444,8 @@ def _u_threshold(
     if not isinstance(theta_config, dict):
         raise ScoringRunnerError("thresholds.theta_u must be a mapping")
     source_condition = str(theta_config.get("source_condition", "full_reference_control"))
+    if source_condition not in declared_conditions:
+        return None
     source_method = str(theta_config.get("source_method", method))
     if source_method == "method":
         source_method = method
@@ -439,6 +469,16 @@ def _u_threshold(
     if values.empty:
         return None
     return float(values.quantile(quantile))
+
+
+def _threshold_mode(thresholds: dict[str, Any], conditions: tuple[object, ...]) -> str:
+    theta_config = thresholds.get("theta_u")
+    if not isinstance(theta_config, dict):
+        return "placeholder_no_abstention"
+    source_condition = str(theta_config.get("source_condition", "full_reference_control"))
+    if source_condition not in conditions:
+        return "unavailable_undeclared_source_condition"
+    return "full_reference_quantile"
 
 
 def _label_entropy_threshold(thresholds: dict[str, Any]) -> float:

@@ -1024,7 +1024,7 @@ def _render_global_detection_table(detection_summary: pd.DataFrame) -> str:
             row.append(_format_table_value(cell, qty))
         lines.append("| " + " | ".join(row) + " |")
 
-    lines.extend(["", "_Scores: UOT/CoRe-OT methods use u; balanced OT uses label uncertainty; NN uses distance; prior-only uses prior_risk._", ""])
+    lines.extend(["", "_Scores: UOT/CoRe-OT methods use u; NN uses distance; prior-only uses prior_risk._", ""])
     return "\n".join(lines)
 
 

@@ -17,7 +17,6 @@ from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from matplotlib.patches import Rectangle
 
 from coreot.results.compare_baselines import select_primary_comparison_rows
 from coreot.results.matched_reference import (
@@ -43,8 +42,8 @@ SELECTED_PARAMETERS = {
 }
 CONDITIONS = ("incomplete_reference", "full_reference_control")
 CONDITION_LABELS = {
-    "incomplete_reference": "Incomplete reference",
-    "full_reference_control": "Full reference",
+    "incomplete_reference": "Reference-omitted condition",
+    "full_reference_control": "Restored-reference condition",
 }
 INCOMPLETE_REFERENCE = "incomplete_reference"
 INTERNAL_CANDIDATE_SET = "pca30_k100"
@@ -1007,7 +1006,7 @@ def collect_full_reference_calibration(
         by_run,
         columns=("held_out_label", "seed", "method", "score"),
         expected=expected,
-        label="full-reference calibration",
+        label="restored-reference calibration",
     )
     for row in by_run.itertuples(index=False):
         manifest_path = (
@@ -1091,6 +1090,132 @@ def collect_global_detection(
     return by_seed, summary
 
 
+def _read_sensitivity_fit_convergence(
+    *,
+    runs_root: Path,
+    run_id: str,
+    candidate_set: str,
+    tau_min: float,
+    tau_max: float,
+    alpha: float,
+) -> dict[str, object]:
+    fit_root = (
+        runs_root
+        / run_id
+        / "transport"
+        / INCOMPLETE_REFERENCE
+        / candidate_set
+        / "coreot_full"
+    )
+    manifest_path = fit_root / "transport_manifest.yaml"
+    method_params_path = fit_root / "method_params.yaml"
+    for path in (manifest_path, method_params_path):
+        if not path.is_file():
+            raise PBMCSupplementError(
+                f"PBMC sensitivity fit evidence is missing for {run_id}: {path}"
+            )
+
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    params = yaml.safe_load(method_params_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict) or not isinstance(params, dict):
+        raise PBMCSupplementError(
+            f"PBMC sensitivity fit evidence must be YAML mappings for {run_id}."
+        )
+    metadata = manifest.get("metadata")
+    artifacts = manifest.get("artifacts")
+    if not isinstance(metadata, dict) or not isinstance(artifacts, dict):
+        raise PBMCSupplementError(
+            f"PBMC sensitivity transport manifest is malformed for {run_id}."
+        )
+    if metadata.get("method") != "coreot_full" or params.get("name") != "coreot_full":
+        raise PBMCSupplementError(
+            f"PBMC sensitivity fit method identity is inconsistent for {run_id}."
+        )
+
+    declared_params = artifacts.get("method_params")
+    if not isinstance(declared_params, str) or not declared_params:
+        raise PBMCSupplementError(
+            f"PBMC sensitivity transport manifest omits method_params for {run_id}."
+        )
+    declared_path = Path(declared_params)
+    declared_candidates = (
+        (declared_path,)
+        if declared_path.is_absolute()
+        else (runs_root.parent / declared_path, fit_root / declared_path)
+    )
+    if method_params_path.resolve() not in {
+        candidate.resolve() for candidate in declared_candidates
+    }:
+        raise PBMCSupplementError(
+            f"PBMC sensitivity transport manifest points outside its fit directory for {run_id}."
+        )
+
+    expected_params = {
+        "tau_min": float(tau_min),
+        "tau_max": float(tau_max),
+        "alpha": float(alpha),
+        "epsilon": 0.05,
+        "tol": 1.0e-6,
+        "numerical_floor": 1.0e-300,
+    }
+    for key, expected in expected_params.items():
+        value = params.get(key)
+        if not isinstance(value, int | float) or not np.isclose(
+            float(value),
+            expected,
+            rtol=0.0,
+            atol=0.0,
+        ):
+            raise PBMCSupplementError(
+                f"PBMC sensitivity method parameter {key} disagrees with the retained "
+                f"contract for {run_id}."
+            )
+    for key in ("alpha", "epsilon"):
+        value = metadata.get(key)
+        if not isinstance(value, int | float) or not np.isclose(
+            float(value),
+            expected_params[key],
+            rtol=0.0,
+            atol=0.0,
+        ):
+            raise PBMCSupplementError(
+                f"PBMC sensitivity manifest metadata {key} disagrees with "
+                f"method_params.yaml for {run_id}."
+            )
+
+    max_iter = params.get("max_iter")
+    n_iter = metadata.get("n_iter")
+    if (
+        isinstance(max_iter, bool)
+        or not isinstance(max_iter, int)
+        or max_iter <= 0
+        or isinstance(n_iter, bool)
+        or not isinstance(n_iter, int)
+        or n_iter <= 0
+        or n_iter > max_iter
+    ):
+        raise PBMCSupplementError(
+            f"PBMC sensitivity iteration evidence is invalid for {run_id}."
+        )
+    if metadata.get("converged") is not True:
+        raise PBMCSupplementError(
+            f"PBMC sensitivity fit did not satisfy its scaling-change tolerance for {run_id}."
+        )
+
+    relative_fit_root = Path(runs_root.name) / fit_root.relative_to(runs_root)
+    return {
+        "condition": INCOMPLETE_REFERENCE,
+        "candidate_set": candidate_set,
+        "convergence_evidence": "verified_converged",
+        "converged": True,
+        "n_iter": n_iter,
+        "max_iter": max_iter,
+        "tol": float(params["tol"]),
+        "transport_manifest": (relative_fit_root / manifest_path.name).as_posix(),
+        "method_params": (relative_fit_root / method_params_path.name).as_posix(),
+    }
+
+
 def collect_sensitivity_results(
     *,
     detection_path: Path,
@@ -1136,6 +1261,14 @@ def collect_sensitivity_results(
     rows = []
     for record in selected.itertuples(index=False):
         run_root = runs_root / str(record.run_id)
+        convergence = _read_sensitivity_fit_convergence(
+            runs_root=runs_root,
+            run_id=str(record.run_id),
+            candidate_set=str(record.candidate_set),
+            tau_min=float(record.tau_min),
+            tau_max=float(record.tau_max),
+            alpha=float(record.alpha),
+        )
         truth = _read_truth(run_root)
         scores = _read_method_scores(
             run_root,
@@ -1183,6 +1316,7 @@ def collect_sensitivity_results(
                 "within_celltype_auprc": float(local["auprc"]),
                 "within_celltype_auroc": float(local["auroc"]),
                 "within_celltype_prevalence": float(local["prevalence"]),
+                **convergence,
             }
         )
     local_by_seed = pd.DataFrame.from_records(rows)
@@ -1472,7 +1606,7 @@ def collect_calibration_percentile_table(
                 finite_full_scores = full_scores[np.isfinite(full_scores)]
                 if not len(finite_full_scores):
                     raise PBMCSupplementError(
-                        f"{run_root} has no finite full-reference scores for {method}."
+                        f"{run_root} has no finite restored-reference scores for {method}."
                     )
                 joined["forced_label"] = joined["forced_label"].fillna("").astype(str)
                 held_out_mask = joined["is_absent_state"].astype(bool)
@@ -1858,7 +1992,13 @@ def _save_figure(fig: plt.Figure, outputs: dict[str, Path]) -> None:
         kwargs = {"bbox_inches": "tight"}
         if suffix == "png":
             kwargs["dpi"] = RASTER_DPI
-        fig.savefig(path, **kwargs)
+        if suffix == "svg":
+            # Keep visible labels in the same path-and-comment representation
+            # regardless of global Matplotlib state left by another renderer.
+            with matplotlib.rc_context({"svg.fonttype": "path"}):
+                fig.savefig(path, **kwargs)
+        else:
+            fig.savefig(path, **kwargs)
         if suffix == "svg":
             content = path.read_text(encoding="utf-8")
             path.write_text(
@@ -1879,12 +2019,11 @@ def render_mechanistic_figure(
     fig = plt.figure(figsize=(11.8, 9.2))
     grid = fig.add_gridspec(
         len(ENDPOINTS),
-        3,
-        width_ratios=(5.6, 1.15, 0.16),
+        2,
+        width_ratios=(5.6, 1.15),
         wspace=0.12,
         hspace=0.62,
     )
-    shared_image = None
     row_specs = (
         ("held_out_stimulated", INCOMPLETE_REFERENCE),
         ("held_out_stimulated", "full_reference_control"),
@@ -1892,7 +2031,7 @@ def render_mechanistic_figure(
         ("same_type_control", "full_reference_control"),
     )
     group_labels = {
-        "held_out_stimulated": "Held-out stimulated cells",
+        "held_out_stimulated": "Reference-omitted stimulated cells",
         "same_type_control": "Same-type controls",
     }
     split_mass = response.drop_duplicates(
@@ -1945,7 +2084,7 @@ def render_mechanistic_figure(
             row_labels.append(f"{group_labels[cell_group]}\n{CONDITION_LABELS[condition]}")
 
         heat = np.asarray(heat_rows, dtype=float)
-        image = heat_axis.imshow(
+        heat_axis.imshow(
             heat,
             vmin=0,
             vmax=1,
@@ -1953,7 +2092,6 @@ def render_mechanistic_figure(
             aspect="auto",
             interpolation="nearest",
         )
-        shared_image = image
         for row_index, (_, condition) in enumerate(row_specs):
             for column_index, destination in enumerate(DESTINATION_CATEGORIES):
                 value = heat[row_index, column_index]
@@ -2014,13 +2152,6 @@ def render_mechanistic_figure(
         mass_axis.tick_params(labelsize=6.5)
         mass_axis.invert_yaxis()
 
-    if shared_image is None:
-        raise PBMCSupplementError("Supplementary Figure S6 has no heatmap data.")
-    colorbar_axis = fig.add_subplot(grid[:, 2])
-    colorbar = fig.colorbar(shared_image, cax=colorbar_axis)
-    colorbar.set_ticks([0.0, 0.25, 0.5, 0.75, 1.0])
-    colorbar.set_label("Mean conditional destination fraction", fontsize=7)
-    colorbar.ax.tick_params(labelsize=6.5)
     _save_figure(fig, outputs)
     plt.close(fig)
 
@@ -2098,28 +2229,6 @@ def render_robustness_figure(
                         fontsize=6.2,
                         color=("white" if scaled < 0.22 or scaled > 0.82 else "#1F1F1F"),
                     )
-            selected_tau_min, selected_tau_max, _ = SELECTED_PARAMETERS[endpoint]
-            selected_row = tau_min_values.index(selected_tau_min)
-            selected_column = tau_max_values.index(selected_tau_max)
-            axis.add_patch(
-                Rectangle(
-                    (selected_column - 0.48, selected_row - 0.48),
-                    0.96,
-                    0.96,
-                    fill=False,
-                    edgecolor="white",
-                    linewidth=2.0,
-                )
-            )
-            axis.scatter(
-                selected_column - 0.34,
-                selected_row + 0.34,
-                marker="*",
-                s=34,
-                color="white",
-                edgecolor="#202020",
-                linewidth=0.4,
-            )
             axis.set_xticks(range(3), [f"{value:g}" for value in tau_max_values])
             axis.set_yticks(range(3), [f"{value:g}" for value in tau_min_values])
             axis.set_xlabel(r"$\tau_{\max}$")
@@ -2587,34 +2696,12 @@ def generate_pbmc_supplement(project_root: Path) -> dict[str, Path]:
         prior_correlations_by_seed,
         prior_dependence_outputs,
     )
-    robustness_alt_path = paths.figures_root / "manuscript_fig_pbmc_supp_robustness_alt.txt"
-    robustness_alt_path.write_text(
-        "Six-panel PBMC query-penalty-bound sensitivity figure. Panels A--C "
-        "show within-cell-type average precision, and Panels D--F show "
-        "represented-state forced macro-F1 over the retained query-penalty "
-        "grid for the B-cell, NK-cell, and dendritic-cell endpoints.\n",
-        encoding="utf-8",
-    )
-    prior_dependence_alt_path = (
-        paths.figures_root / "manuscript_fig_pbmc_supp_prior_dependence_alt.txt"
-    )
-    prior_dependence_alt_path.write_text(
-        "Four-panel PBMC prior-dependence diagnostic. Panels A--C show "
-        "query-marginal deficit versus prior risk in within-split "
-        "equal-frequency intervals for the B-cell, NK-cell, and "
-        "dendritic-cell endpoints. Panel D shows split-level Spearman "
-        "correlations between deficit and prior risk for the three endpoints.\n",
-        encoding="utf-8",
-    )
-
     all_artifacts = [
         *generated_tables,
         mechanistic_cells_output,
         *mechanistic_outputs.values(),
         *robustness_outputs.values(),
         *prior_dependence_outputs.values(),
-        robustness_alt_path,
-        prior_dependence_alt_path,
         component_minus_m_path,
         rho_tau_figure_path,
         rho_tau_caption_path,
@@ -2658,6 +2745,12 @@ def generate_pbmc_supplement(project_root: Path) -> dict[str, Path]:
         ],
         *benchmark_coupling_inputs,
         *destination_response_sources,
+        *[
+            project_root / artifact
+            for artifact in sensitivity_by_seed[
+                ["transport_manifest", "method_params"]
+            ].to_numpy().ravel()
+        ],
     ]
     manifest_path = project_root / "results/PBMC/manuscript/pbmc_supplement_manifest.yaml"
     manifest = {

@@ -427,7 +427,6 @@ def test_canonical_natural_prior_config_uses_conservative_dynamic_range() -> Non
     }
     assert config["experiments"]["natural_mismatch"]["methods"] == [
         "nn",
-        "balanced_ot",
         "uniform_uot",
         "coreot_constant_tau",
         "coreot_match_only",
@@ -446,7 +445,6 @@ def test_proliferating_uniform_tau_override_preserves_mean_matched_ablation() ->
     methods = _transport_method_configs(
         config,
         natural["methods"],
-        balanced_support=natural["balanced_ot_support"],
         coreot_full_override=natural["coreot_full"],
         mean_matched_factorial=natural["mean_matched_primary_factorial"],
         uniform_uot_tau_source=natural["endpoints"]["Proliferating"][
@@ -662,7 +660,6 @@ def test_run_natural_mismatch_reverses_mapping_and_marks_restoration_undefined(
             "Proliferating": {"uniform_uot_tau_source": 4.0},
         },
         "methods": [
-            "balanced_ot",
             "uniform_uot",
             "coreot_constant_tau",
             "coreot_match_only",
@@ -704,7 +701,6 @@ def test_run_natural_mismatch_reverses_mapping_and_marks_restoration_undefined(
         },
     }
     config["methods"]["transport"] = [
-        "balanced_ot",
         "coreot_constant_tau",
         "coreot_full",
     ]
@@ -788,13 +784,6 @@ def test_run_natural_mismatch_reverses_mapping_and_marks_restoration_undefined(
         "coreot_match_only",
         "uniform_uot",
     } <= set(scores["method"])
-    balanced_manifest = read_manifest(
-        run_root
-        / "transport/natural_mismatch/mouse_spleen_provider_k100/balanced_ot/transport_manifest.yaml"
-    )
-    assert balanced_manifest.metadata["support"] == "dense"
-    assert balanced_manifest.metadata["converged"] is True
-
     aggregate = run_stage(config_path, "aggregate_natural_mismatch")
     metrics = pd.read_csv(aggregate.artifacts["metrics"])
     required_scores = {
@@ -981,24 +970,12 @@ def test_run_natural_mismatch_reverses_mapping_and_marks_restoration_undefined(
     }
     assert match_component[list(report_metrics)].notna().all().all()
     assert compatibility_component[list(report_metrics)].notna().all().all()
-    assert component.artifacts["match_only_figure"].is_file()
     assert component.artifacts["compatibility_only_figure"].is_file()
     assert (
         component.artifacts["compatibility_only_figure"].name
         == "manuscript_fig_mouse_spleen_component_minus_m.png"
     )
-    assert component.artifacts["match_only_report"].is_file()
-    assert component.artifacts["compatibility_only_report"].is_file()
-    for report_key in ("match_only_report", "compatibility_only_report"):
-        report = component.artifacts[report_key].read_text(encoding="utf-8")
-        assert "$u$-based AUROC" in report
-        assert "$u$-based AP" in report
-        assert "Forced accuracy" in report
-        assert "Forced macro-F1" in report
-        assert "Post-abstention accuracy" not in report
-        assert "Post-abstention macro-F1" not in report
-        assert "| Coverage |" not in report
-        assert "Shared false-abstention rate" not in report
+    assert "compatibility_only_report" not in component.artifacts
     component_manifest = read_manifest(component.manifest_path)
     assert component_manifest.metadata["n_match_only_completed"] == 4
     assert component_manifest.metadata["n_compatibility_only_completed"] == 2
@@ -1033,7 +1010,7 @@ def test_prepare_baselines_reconstructs_explicit_pseudocount_input(
         adata.X = np.full(adata.shape, np.log1p(2500.0))
         adata.write_h5ad(path)
     config["baselines"] = {
-        "internal": ["prior_only", "nn", "balanced_ot", "uniform_uot"],
+        "internal": ["prior_only", "nn", "uniform_uot"],
         "external": ["celltypist_l3"],
         "threshold_quantile": 0.95,
     }

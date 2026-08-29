@@ -14,6 +14,7 @@ from coreot.benchmarks.conditions import (
     DEFAULT_CONDITIONS,
     FULL_REFERENCE_CONTROL,
     INCOMPLETE_REFERENCE,
+    SUPPORTED_CONDITION_CONTRACTS,
 )
 from coreot.benchmarks.splits import make_query_mask
 from coreot.benchmarks.validation import validate_missing_state_benchmark_artifacts
@@ -415,7 +416,7 @@ def _write_split_manifest(
     split_manifest = pd.DataFrame(
         {
             "cell_id": obs["cell_id"].astype(str),
-            "split_domain": "reference",
+            "split_domain": "excluded",
             "split_seed": seed,
         }
     )
@@ -443,10 +444,11 @@ def _write_condition_manifest(
 
 
 def _validate_conditions(conditions: tuple[str, ...]) -> None:
-    if conditions != DEFAULT_CONDITIONS:
+    if conditions not in SUPPORTED_CONDITION_CONTRACTS:
         raise BenchmarkBuildError(
-            "benchmark-build currently requires conditions "
-            f"{DEFAULT_CONDITIONS}; got {conditions}"
+            "benchmark-build requires the paired primary conditions "
+            f"{DEFAULT_CONDITIONS} or the incomplete-reference-only sensitivity "
+            f"condition; got {conditions}"
         )
 
 

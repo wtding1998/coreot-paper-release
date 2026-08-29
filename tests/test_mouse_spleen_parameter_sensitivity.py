@@ -80,6 +80,19 @@ def test_renders_all_formats_with_y_ticks_on_both_panels(tmp_path: Path) -> None
     assert DISPLAY_TAU_MAX == (4.0, 5.0, 6.0)
 
 
+def test_current_bundle_excludes_alt_text_artifact() -> None:
+    manifest = (
+        PROJECT_ROOT
+        / "results/mouse_spleen_core_ot/manuscript/parameter_sensitivity/manifest.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "alt_text:" not in manifest
+    assert not (
+        PROJECT_ROOT
+        / "docs/figs/manuscript_fig_mouse_spleen_supp_parameter_sensitivity_alt.txt"
+    ).exists()
+
+
 def test_generated_source_matches_regenerated_grid() -> None:
     grid_path = (
         PROJECT_ROOT
@@ -97,13 +110,17 @@ def test_generated_source_matches_regenerated_grid() -> None:
     supplement = (PROJECT_ROOT / "docs/manuscript_supp.md").read_text(
         encoding="utf-8"
     )
-    section = supplement.split("#### S4.5.3. Parameter sensitivity", maxsplit=1)[
-        1
-    ].split("#### S4.5.4.", maxsplit=1)[0]
+    section = supplement.split(
+        "#### S4.5.3. Query-penalty sensitivity", maxsplit=1
+    )[1].split("---", maxsplit=1)[0]
     compact = " ".join(section.split())
     assert "figs/manuscript_fig_mouse_spleen_supp_parameter_sensitivity.png" in section
-    assert "AP ranged from \\(0.440\\) to \\(0.458\\)" in compact
-    assert "forced macro-F1 ranged from \\(0.657\\) to \\(0.664\\)" in compact
+    assert "Supplementary Figure S12. Local mouse-spleen query-penalty-bound sensitivity." in (
+        section
+    )
     assert "\\tau_{\\min}\\in\\{2,3,4\\}" in compact
     assert "\\tau_{\\max}\\in\\{4,5,6\\}" in compact
-    assert "rather than independent robustness validation" in compact
+    assert "The full evaluated triangular grid is provided in Supplementary Data 4." in (
+        compact
+    )
+    assert "Proliferating-cell AP had a larger empirical range" in compact

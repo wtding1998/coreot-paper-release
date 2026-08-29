@@ -25,7 +25,6 @@ from experiments.missing_celltype.generate_grid_configs import (  # noqa: E402
 DEFAULT_HELD_OUT_LABELS = ("HLA-DRhi cDC2", "ISG+ cDC2")
 SELECTED_METHODS = (
     "nn",
-    "balanced_ot",
     "uniform_uot",
     "coreot_full",
     "coreot_match_only",

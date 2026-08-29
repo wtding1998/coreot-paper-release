@@ -589,9 +589,6 @@ def generate_report(project_root: Path) -> tuple[Path, Path]:
     component_root = output_root / "natural_mismatch/sensitivity/component_ablation_proliferating"
     compatibility_ablation_path = component_root / "tables/compatibility_only_metrics.csv"
     docs_root = project_root / "docs"
-    compatibility_ablation_report_path = (
-        docs_root / "manuscript_supp_mouse_spleen_proliferating_compatibility_only.md"
-    )
     compatibility_ablation_figure_path = (
         docs_root / "figs" / "manuscript_fig_mouse_spleen_component_minus_m.png"
     )
@@ -609,24 +606,12 @@ def generate_report(project_root: Path) -> tuple[Path, Path]:
         docs_root
         / "figs/manuscript_supp_rho_attribution_mouse_spleen_alpha5.png"
     )
-    prior_dependence_root = output_root / "manuscript/prior_dependence"
-    prior_dependence_figure_path = (
-        docs_root / "figs/manuscript_fig_mouse_spleen_prior_dependence.png"
-    )
-    prior_dependence_summary_path = (
-        prior_dependence_root / "prior_correlation.csv"
-    )
-    prior_dependence_manifest_path = prior_dependence_root / "manifest.yaml"
     required_supplement_artifacts = (
         compatibility_ablation_path,
-        compatibility_ablation_report_path,
         compatibility_ablation_figure_path,
         rho_tau_alpha5_summary_path,
         rho_tau_alpha5_manifest_path,
         rho_tau_alpha5_figure_path,
-        prior_dependence_figure_path,
-        prior_dependence_summary_path,
-        prior_dependence_manifest_path,
     )
     missing_supplement_artifacts = [
         str(path) for path in required_supplement_artifacts if not path.is_file()
@@ -680,15 +665,6 @@ def generate_report(project_root: Path) -> tuple[Path, Path]:
                     ),
                     "rho_attribution_alpha5_manifest": str(
                         rho_tau_alpha5_manifest_path.relative_to(project_root)
-                    ),
-                    "prior_dependence_figure": str(
-                        prior_dependence_figure_path.relative_to(project_root)
-                    ),
-                    "prior_dependence_summary": str(
-                        prior_dependence_summary_path.relative_to(project_root)
-                    ),
-                    "prior_dependence_manifest": str(
-                        prior_dependence_manifest_path.relative_to(project_root)
                     ),
                     "processed_to_retained_cohort": str(cohort_path.relative_to(project_root)),
                     "cohort_transition_manifest": str(

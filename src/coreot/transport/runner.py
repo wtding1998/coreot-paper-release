@@ -814,7 +814,7 @@ def _run_sparse_uot_method(
             "domain": "query",
             "a": source_mass,
             "a_hat": result.source_marginal,
-            "u": np.maximum(source_mass - result.source_marginal, 0.0) / (source_mass + eta),
+            "u": np.maximum(source_mass - result.source_marginal, 0.0) / source_mass,
             "e": np.maximum(result.source_marginal - source_mass, 0.0) / (source_mass + eta),
             "rho": source["rho"].astype(float),
             "tau_source": tau_source,
@@ -837,6 +837,12 @@ def _run_sparse_uot_method(
         "alpha": alpha,
         "n_iter": result.n_iter,
         "converged": result.converged,
+        "terminal_scaling_change": result.terminal_scaling_change,
+        "fixed_point_residual": result.fixed_point_residual,
+        "kernel_floor_active": result.kernel_floor_active,
+        "denominator_floor_active": result.denominator_floor_active,
+        "nonfinite_detected": result.nonfinite_detected,
+        "iteration_cap_reached": result.iteration_cap_reached,
         "total_transported_mass": float(result.coupling.sum()),
     }
     if "coreot_rho_cell_id_hash" in source.columns:

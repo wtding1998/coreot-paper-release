@@ -217,23 +217,8 @@ def _read_checkpoint(
     return frame
 
 
-def _value_slug(value: float) -> str:
-    return f"{value:g}".replace(".", "p")
-
-
-def _pbmc_provider_rho_path(
-    runs_root: Path, run_root: Path, spec: EndpointSpec
-) -> Path:
-    selected_run = (
-        f"{run_root.name}_taumin{_value_slug(spec.selected_tau[0])}"
-        f"_taumax{_value_slug(spec.selected_tau[1])}"
-        f"_alpha{_value_slug(spec.selected_alpha)}_coreot_full"
-    )
-    return (
-        runs_root
-        / selected_run
-        / "transport/provider_reliability/pca30/source_rho.csv"
-    )
+def _pbmc_provider_rho_path(run_root: Path) -> Path:
+    return run_root / "transport/provider_reliability/pca30/source_rho.csv"
 
 
 def _method_metadata(path: Path) -> dict[str, object]:
@@ -243,6 +228,23 @@ def _method_metadata(path: Path) -> dict[str, object]:
         "converged": bool(metadata.get("converged", False)),
         "n_iterations": int(metadata.get("n_iter", 0)),
     }
+
+
+def _complete_pair_fit_artifacts(path: Path) -> bool:
+    return all(
+        (path / variant / filename).is_file()
+        for variant in VARIANTS
+        for filename in RETAINED_FIT_FILES
+    )
+
+
+def _missing_pair_fit_artifacts(path: Path) -> list[str]:
+    return [
+        f"{variant}/{filename}"
+        for variant in VARIANTS
+        for filename in RETAINED_FIT_FILES
+        if not (path / variant / filename).is_file()
+    ]
 
 
 def _run_method(
@@ -337,6 +339,7 @@ def _run_replicate(
     spec: EndpointSpec,
     seed: int,
     pbmc_condition: pd.Series | None,
+    retain_fit_artifacts: bool = False,
 ) -> Path:
     if spec.experiment == "mouse":
         run_root, inputs = _mouse_input_paths(project_root)
@@ -358,7 +361,7 @@ def _run_replicate(
     truth = pd.read_csv(inputs["truth"])
     source_hash = sha256_file(inputs["source_priors"])
     if spec.experiment == "pbmc":
-        provider_rho_path = _pbmc_provider_rho_path(runs_root, run_root, spec)
+        provider_rho_path = _pbmc_provider_rho_path(run_root)
         if not provider_rho_path.is_file():
             raise FileNotFoundError(
                 f"Missing calibrated PBMC provider reliability: {provider_rho_path}"
@@ -402,12 +405,29 @@ def _run_replicate(
         "candidate_edges_sha256": candidate_hash,
         "source_priors_sha256": source_hash,
     }
+    storage = "fits" if retain_fit_artifacts else "tmp"
+
+    def pair_root(alpha: float) -> Path:
+        return (
+            paths.root
+            / storage
+            / spec.slug
+            / replicate
+            / f"alpha_{alpha:g}"
+        )
+
     frame = _read_checkpoint(
         checkpoint,
         identity,
         configured_alpha,
         reset_on_identity_mismatch=spec.experiment == "pbmc",
     )
+    if retain_fit_artifacts:
+        keep = [
+            _complete_pair_fit_artifacts(pair_root(float(row.alpha)))
+            for row in frame.itertuples(index=False)
+        ]
+        frame = frame.loc[keep].copy()
     frame.to_csv(checkpoint, index=False)
     completed = set(frame["alpha"].astype(float))
     for alpha in sorted(configured_alpha):
@@ -416,15 +436,13 @@ def _run_replicate(
         metrics: dict[str, dict[str, object]] = {}
         metadata: dict[str, dict[str, object]] = {}
         runtime: dict[str, float] = {}
+        current_pair_root = pair_root(alpha)
+        if retain_fit_artifacts and current_pair_root.exists() and not _complete_pair_fit_artifacts(
+            current_pair_root
+        ):
+            shutil.rmtree(current_pair_root)
         for variant in VARIANTS:
-            method_root = (
-                paths.root
-                / "tmp"
-                / spec.slug
-                / replicate
-                / f"alpha_{alpha:g}"
-                / variant
-            )
+            method_root = current_pair_root / variant
             scores, metadata[variant], runtime[variant] = _run_method(
                 variant=variant,
                 method_root=method_root,
@@ -441,6 +459,14 @@ def _run_replicate(
                 truth=truth,
                 scores=scores,
                 pbmc_condition=pbmc_condition,
+            )
+        if retain_fit_artifacts and not _complete_pair_fit_artifacts(
+            current_pair_root
+        ):
+            raise ValueError(
+                "Retained rho-attribution pair lacks artifacts "
+                f"{_missing_pair_fit_artifacts(current_pair_root)}: "
+                f"{current_pair_root}"
             )
         row: dict[str, object] = {
             **identity,
@@ -479,13 +505,8 @@ def _run_replicate(
             else pd.concat([frame, new_row], ignore_index=True)
         ).sort_values("alpha")
         frame.to_csv(checkpoint, index=False)
-        shutil.rmtree(
-            paths.root
-            / "tmp"
-            / spec.slug
-            / replicate
-            / f"alpha_{alpha:g}"
-        )
+        if not retain_fit_artifacts:
+            shutil.rmtree(current_pair_root)
     return checkpoint
 
 
@@ -688,6 +709,7 @@ def run_search(
     jobs: int,
     runs_root: Path,
     pbmc_raw_path: Path,
+    retain_fit_artifacts: bool = False,
 ) -> SearchPaths:
     specs = _specs(experiment, endpoints)
     paths = _search_paths(project_root, experiment)
@@ -709,6 +731,7 @@ def run_search(
                 spec=spec,
                 seed=seed,
                 pbmc_condition=pbmc_condition,
+                retain_fit_artifacts=retain_fit_artifacts,
             ): (spec.endpoint, seed)
             for spec, seed in tasks
         }
@@ -760,6 +783,11 @@ def build_parser() -> argparse.ArgumentParser:
             "per-replicate tables without running model fits."
         ),
     )
+    parser.add_argument(
+        "--retain-fit-artifacts",
+        action="store_true",
+        help="Retain complete paired fit bundles and resume only complete pairs.",
+    )
     return parser
 
 
@@ -799,6 +827,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 jobs=args.jobs,
                 runs_root=args.runs_root.resolve(),
                 pbmc_raw_path=args.pbmc_raw_path.resolve(),
+                retain_fit_artifacts=args.retain_fit_artifacts,
             )
         print(paths.summary)
         print(paths.figure)

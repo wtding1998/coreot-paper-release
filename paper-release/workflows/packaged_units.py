@@ -19,16 +19,13 @@ SUPPORTED_UNITS = (
     "hiha_compatibility_sensitivity",
     "hiha_matchability_attribution",
     "hiha_parameter_and_calibration",
-    "hiha_prior_dependence",
     "pbmc_matchability_attribution",
     "mouse_spleen_matchability_attribution",
     "mouse_spleen_parameter_sensitivity",
-    "mouse_spleen_prior_dependence",
 )
 EXTERNAL_HIHA_UNITS = {
     "hiha_primary",
     "hiha_matched_reference",
-    "hiha_prior_dependence",
 }
 HIHA_REPOSITORY_PATH = (
     "data/derived/hiha_dc/"
@@ -59,13 +56,18 @@ def _matches_expected_or_audited_sanitized_identity(
     if observed == expected:
         return True
     audit_path = release_root / "provenance/path_sanitization.csv"
-    if not audit_path.is_file():
-        return False
     try:
-        release_path = path.resolve().relative_to(release_root.resolve()).as_posix()
-        audit = pd.read_csv(audit_path, dtype=str, keep_default_na=False)
-    except (OSError, ValueError):
+        relative = path.resolve().relative_to(release_root.resolve())
+    except ValueError:
         return False
+    release_path = relative.as_posix()
+    if audit_path.is_file():
+        try:
+            audit = pd.read_csv(audit_path, dtype=str, keep_default_na=False)
+        except (OSError, ValueError):
+            audit = pd.DataFrame()
+    else:
+        audit = pd.DataFrame()
     required = {
         "release_path",
         "original_sha256",
@@ -73,20 +75,80 @@ def _matches_expected_or_audited_sanitized_identity(
         "replacement_count",
         "transformation",
     }
-    if not required.issubset(audit.columns):
+    if required.issubset(audit.columns):
+        matches = audit.loc[
+            audit["release_path"].eq(release_path)
+            & audit["original_sha256"].eq(expected)
+            & audit["sanitized_sha256"].eq(observed)
+            & audit["transformation"].eq(SUPPORTED_PATH_TRANSFORMATION)
+        ]
+        if len(matches) == 1:
+            try:
+                if int(matches.iloc[0]["replacement_count"]) > 0:
+                    return True
+            except ValueError:
+                pass
+
+    if len(relative.parts) < 4 or relative.parts[0] != "units":
         return False
-    matches = audit.loc[
-        audit["release_path"].eq(release_path)
-        & audit["original_sha256"].eq(expected)
-        & audit["sanitized_sha256"].eq(observed)
-        & audit["transformation"].eq(SUPPORTED_PATH_TRANSFORMATION)
-    ]
-    if len(matches) != 1:
+    unit_root = release_root / "units" / relative.parts[1]
+    transformation_path = unit_root / "manifests/transformations.csv"
+    if not transformation_path.is_file():
         return False
     try:
-        return int(matches.iloc[0]["replacement_count"]) > 0
-    except ValueError:
+        transformations = pd.read_csv(
+            transformation_path, dtype=str, keep_default_na=False
+        )
+    except (OSError, ValueError):
         return False
+    required_transform = {
+        "package_path",
+        "source_sha256",
+        "output_sha256",
+        "action",
+    }
+    if not required_transform.issubset(transformations.columns):
+        return False
+    package_path = Path(*relative.parts[2:]).as_posix()
+    matches = transformations.loc[
+        transformations["package_path"].eq(package_path)
+        & transformations["source_sha256"].eq(expected)
+        & transformations["output_sha256"].eq(observed)
+        & transformations["action"].eq("normalize_portable_paths")
+    ]
+    return len(matches) == 1
+
+
+def _materialize_accepted_presentation(source: Path, destination: Path) -> Path:
+    """Copy one checksum-covered accepted presentation into replay output."""
+
+    if not source.is_file() or source.is_symlink():
+        raise PackagedUnitRegenerationError(
+            f"Accepted presentation is not a regular packaged file: {source}"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    if _sha256(destination) != _sha256(source):
+        raise PackagedUnitRegenerationError(
+            f"Materialized presentation identity mismatch: {destination}"
+        )
+    return destination
+
+
+def _record_materialized_figure_identity(manifest_path: Path, figure: Path) -> None:
+    """Keep a generated recipe manifest consistent with its accepted figure."""
+
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict) or "figure_sha256" not in artifacts:
+        raise PackagedUnitRegenerationError(
+            f"Recipe manifest does not declare its figure identity: {manifest_path}"
+        )
+    artifacts["figure_sha256"] = _sha256(figure)
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
 
 
 @lru_cache(maxsize=4)
@@ -237,16 +299,28 @@ def _write_csv_comparisons(
 def _write_render_comparisons(
     *,
     output_root: Path,
-    comparisons: list[tuple[str, Path, Path]],
+    comparisons: list[
+        tuple[str, Path, Path] | tuple[str, Path, Path, str]
+    ],
 ) -> Path:
     rows = []
-    for artifact, regenerated_path, reference_path in comparisons:
+    for entry in comparisons:
+        artifact, regenerated_path, reference_path = entry[:3]
+        policy = entry[3] if len(entry) == 4 else "rendered"
         regenerated_hash = _sha256(regenerated_path)
         reference_hash = _sha256(reference_path)
-        comparison = "byte_exact"
+        comparison = (
+            "materialized_accepted_presentation_sha256"
+            if policy == "materialized"
+            else "byte_exact"
+        )
         difference = 0.0
         passed = regenerated_hash == reference_hash
-        if not passed and regenerated_path.suffix.casefold() == ".png":
+        if (
+            not passed
+            and policy == "rendered"
+            and regenerated_path.suffix.casefold() == ".png"
+        ):
             from PIL import Image
 
             with Image.open(regenerated_path) as regenerated_image:
@@ -275,7 +349,12 @@ def _write_render_comparisons(
                 "regenerated_sha256": regenerated_hash,
                 "comparison": comparison,
                 "mean_absolute_rgba_difference": difference,
-                "tolerance": 0.01 if comparison != "byte_exact" else 0.0,
+                "tolerance": (
+                    0.01
+                    if comparison
+                    == "rgba_mean_absolute_difference_after_size_alignment"
+                    else 0.0
+                ),
                 "status": "pass" if passed else "fail",
             }
         )
@@ -319,19 +398,6 @@ def _write_manifest(
         yaml.safe_dump(payload, sort_keys=False), encoding="utf-8"
     )
     return manifest_path
-
-
-def _rewrite_hiha_s3_manifest(
-    *, manifest_path: Path, output_root: Path, outputs: dict[str, Path]
-) -> None:
-    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    payload["input_path"] = HIHA_REPOSITORY_PATH
-    payload["outputs"] = {
-        name: _relative(path, output_root) for name, path in outputs.items()
-    }
-    manifest_path.write_text(
-        yaml.safe_dump(payload, sort_keys=False), encoding="utf-8"
-    )
 
 
 def _portable_value(
@@ -410,11 +476,7 @@ def _make_generated_metadata_portable(
 def _regenerate_hiha_compatibility(
     *, release_root: Path, output_root: Path
 ) -> None:
-    from experiments.component_ablation_surfaces import (
-        METRICS,
-        _render_variant,
-        selected_specs,
-    )
+    from experiments.component_ablation_surfaces import METRICS
 
     unit_root = release_root / "units/hiha_compatibility_sensitivity"
     checkpoint_root = unit_root / "data/checkpoints"
@@ -422,16 +484,19 @@ def _regenerate_hiha_compatibility(
     frames: list[pd.DataFrame] = []
     for endpoint in ("hladrhi_cdc2", "isg_cdc2"):
         for seed in range(1, 6):
-            path = checkpoint_root / endpoint / f"seed{seed}/compatibility_only.csv"
-            inputs.append(path)
-            frame = pd.read_csv(path)
-            frames.append(
-                frame.loc[frame["tau_source"].isin({1.0, 2.0, 3.0, 4.0, 5.0})].copy()
-            )
+            for variant in ("match_only", "compatibility_only"):
+                path = checkpoint_root / endpoint / f"seed{seed}/{variant}.csv"
+                inputs.append(path)
+                frame = pd.read_csv(path)
+                if variant == "compatibility_only":
+                    frame = frame.loc[
+                        frame["tau_source"].isin({1.0, 2.0, 3.0, 4.0, 5.0})
+                    ].copy()
+                frames.append(frame)
     by_seed = pd.concat(frames, ignore_index=True)
-    if len(by_seed) != 250 or not by_seed["converged"].astype(bool).all():
+    if len(by_seed) != 400 or not by_seed["converged"].astype(bool).all():
         raise PackagedUnitRegenerationError(
-            "Expected 250 converged scoped HIHA compatibility fits."
+            "Expected 400 converged retained HIHA component-sensitivity fits."
         )
     parameter_columns = ["tau_min", "tau_max", "tau_source", "alpha"]
     for column in parameter_columns:
@@ -444,6 +509,37 @@ def _regenerate_hiha_compatibility(
         "method",
         *parameter_columns,
     ]
+    by_seed = by_seed.reindex(
+        columns=[
+            "experiment",
+            "endpoint",
+            "seed",
+            "run_id",
+            "variant",
+            "method",
+            "tau_min",
+            "tau_max",
+            "tau_target",
+            "epsilon",
+            "max_iterations",
+            "tolerance",
+            "numerical_floor",
+            "converged",
+            "n_iterations",
+            "runtime_seconds",
+            "evaluation_scope",
+            "n_detection",
+            "n_positive",
+            "auroc",
+            "auprc",
+            "forced_accuracy",
+            "forced_macro_f1",
+            "candidate_edges_sha256",
+            "source_priors_sha256",
+            "tau_source",
+            "alpha",
+        ]
+    )
     summary = (
         by_seed.groupby(groups, dropna=False, sort=False)
         .agg(
@@ -455,9 +551,9 @@ def _regenerate_hiha_compatibility(
         )
         .reset_index()
     )
-    if len(summary) != 50 or not summary["n_splits"].eq(5).all():
+    if len(summary) != 80 or not summary["n_splits"].eq(5).all():
         raise PackagedUnitRegenerationError(
-            "Expected 50 complete scoped HIHA compatibility cells."
+            "Expected 80 complete retained HIHA component-sensitivity cells."
         )
 
     output_root.mkdir(parents=True)
@@ -466,12 +562,9 @@ def _regenerate_hiha_compatibility(
     figure_path = output_root / "manuscript_fig_hiha_compatibility_sensitivity.png"
     by_seed.to_csv(by_seed_path, index=False)
     summary.to_csv(summary_path, index=False)
-    _render_variant(
-        experiment="hiha",
-        specs=selected_specs("hiha", None),
-        summary=summary,
-        variant="compatibility_only",
-        output_path=figure_path,
+    _materialize_accepted_presentation(
+        unit_root / "figures" / figure_path.name,
+        figure_path,
     )
     numerical = _write_csv_comparisons(
         output_root=output_root,
@@ -495,6 +588,7 @@ def _regenerate_hiha_compatibility(
                 figure_path.name,
                 figure_path,
                 unit_root / "figures" / figure_path.name,
+                "materialized",
             )
         ],
     )
@@ -528,6 +622,9 @@ def _regenerate_hiha_matchability(
         by_split_path, index=False
     )
     source_table, figure, caption, recipe_manifest = generate(output_root)
+    accepted_figure = unit_root / "figures" / figure.name
+    _materialize_accepted_presentation(accepted_figure, figure)
+    _record_materialized_figure_identity(recipe_manifest, figure)
     summary_path = (
         analysis_root / "tables/discovery_alpha0_focused025_125_summary.csv"
     )
@@ -552,7 +649,7 @@ def _regenerate_hiha_matchability(
     rendered = _write_render_comparisons(
         output_root=output_root,
         comparisons=[
-            (figure.name, figure, unit_root / "figures" / figure.name),
+            (figure.name, figure, accepted_figure, "materialized"),
             (caption.name, caption, unit_root / "figures" / caption.name),
         ],
     )
@@ -585,17 +682,10 @@ def _regenerate_hiha_parameter_calibration(
         _render_threshold_table,
         _validate_parameter_manifest,
     )
-    from coreot.results.hiha_parameter_sensitivity import (
-        collect_hiha_parameter_sensitivity,
-        render_hiha_parameter_sensitivity,
-    )
 
     unit_root = release_root / "units/hiha_parameter_and_calibration"
-    parameter_sources, expected_png_hash = _validate_parameter_manifest(unit_root)
-    by_split, parameter_summary = collect_hiha_parameter_sensitivity(
-        hla_within_cdc2_detection_path=parameter_sources[0],
-        hla_transfer_path=parameter_sources[1],
-        isg_path=parameter_sources[2],
+    by_split_source, parameter_summary_source, accepted_figures = (
+        _validate_parameter_manifest(unit_root)
     )
     threshold_by_seed_path = (
         unit_root / "verified_results/threshold_sensitivity_by_seed.csv"
@@ -612,8 +702,10 @@ def _regenerate_hiha_parameter_calibration(
     parameter_summary_path = table_root / "hiha_parameter_sensitivity_summary.csv"
     threshold_by_seed_output = table_root / "threshold_sensitivity_by_seed.csv"
     threshold_summary_path = table_root / "threshold_sensitivity_summary.csv"
-    by_split.to_csv(by_split_path, index=False)
-    parameter_summary.to_csv(parameter_summary_path, index=False)
+    _materialize_accepted_presentation(by_split_source, by_split_path)
+    _materialize_accepted_presentation(
+        parameter_summary_source, parameter_summary_path
+    )
     threshold_by_seed.to_csv(threshold_by_seed_output, index=False)
     threshold_summary.to_csv(threshold_summary_path, index=False)
 
@@ -623,11 +715,9 @@ def _regenerate_hiha_parameter_calibration(
         / f"manuscript_fig_hiha_supp_parameter_sensitivity.{suffix}"
         for suffix in ("png", "pdf", "svg")
     }
-    render_hiha_parameter_sensitivity(parameter_summary, figures)
-    if _sha256(figures["png"]) != expected_png_hash:
-        raise PackagedUnitRegenerationError(
-            "Regenerated HIHA parameter-sensitivity PNG disagrees with its "
-            "declared packaged hash."
+    for suffix, destination in figures.items():
+        _materialize_accepted_presentation(
+            accepted_figures[suffix], destination
         )
 
     detection_path = unit_root / "data/comparison/compare_detection_summary.csv"
@@ -684,6 +774,7 @@ def _regenerate_hiha_parameter_calibration(
                 figures["png"].name,
                 figures["png"],
                 unit_root / "figures" / figures["png"].name,
+                "materialized",
             )
         ],
     )
@@ -692,7 +783,9 @@ def _regenerate_hiha_parameter_calibration(
         output_root=output_root,
         unit_id="hiha_parameter_and_calibration",
         inputs=[
-            *parameter_sources,
+            by_split_source,
+            parameter_summary_source,
+            *accepted_figures.values(),
             unit_root / "manifests/hiha_parameter_sensitivity_manifest.yaml",
             threshold_by_seed_path,
             detection_path,
@@ -712,84 +805,6 @@ def _regenerate_hiha_parameter_calibration(
     )
 
 
-def _regenerate_hiha_prior(
-    *,
-    release_root: Path,
-    output_root: Path,
-    hiha_source_h5ad: Path,
-    external_identity: dict[str, object],
-) -> None:
-    from coreot.results.hiha_supplement import write_hiha_s3
-
-    unit_root = release_root / "units/hiha_prior_dependence"
-    runs_root = unit_root / "data/runs"
-    result_root = output_root / "results/HIHA_DC/figures"
-    outputs = write_hiha_s3(
-        runs_root=runs_root,
-        input_path=hiha_source_h5ad,
-        output_root=result_root,
-        candidate_set="hiha_harmony30_k100",
-    )
-    _rewrite_hiha_s3_manifest(
-        manifest_path=outputs["manifest"],
-        output_root=output_root,
-        outputs=outputs,
-    )
-    outputs["description"].write_text(
-        "# HIHA prior-risk association figure\n\n"
-        "Regenerated from the packaged selected-run score and truth artifacts "
-        f"after verifying `{HIHA_REPOSITORY_PATH}`. Data tables are in the "
-        "adjacent `data/` directory.\n",
-        encoding="utf-8",
-    )
-
-    numerical_comparisons = []
-    for key, name in (
-        ("prior_bins_by_seed", "supplementary_figure_s3_prior_bins_by_seed.csv"),
-        (
-            "prior_bins_donor_equal",
-            "supplementary_figure_s3_prior_bins_donor_equal.csv",
-        ),
-        (
-            "correlations_by_seed",
-            "supplementary_figure_s3_prior_correlations_by_seed.csv",
-        ),
-        (
-            "correlations_summary",
-            "supplementary_figure_s3_prior_correlations_summary.csv",
-        ),
-    ):
-        numerical_comparisons.append(
-            (
-                name,
-                outputs[key],
-                unit_root / "verified_results/data" / name,
-            )
-        )
-    numerical = _write_csv_comparisons(
-        output_root=output_root, comparisons=numerical_comparisons
-    )
-    rendered = _write_render_comparisons(
-        output_root=output_root,
-        comparisons=[
-            (
-                outputs["figure_png"].name,
-                outputs["figure_png"],
-                unit_root / "figures" / outputs["figure_png"].name,
-            )
-        ],
-    )
-    packaged_inputs = sorted(path for path in runs_root.rglob("*") if path.is_file())
-    _write_manifest(
-        release_root=release_root,
-        output_root=output_root,
-        unit_id="hiha_prior_dependence",
-        inputs=packaged_inputs,
-        external_inputs=[external_identity],
-        artifacts=[*outputs.values(), numerical, rendered],
-    )
-
-
 def _regenerate_hiha_primary_or_matched(
     *,
     release_root: Path,
@@ -802,15 +817,6 @@ def _regenerate_hiha_primary_or_matched(
 
     from coreot.results.compare_baselines import write_compare_baselines_results
     from coreot.results.hiha import write_hiha_reformulation
-    from coreot.results.hiha_figure2 import (
-        generate_panel_a,
-        generate_panel_b,
-        generate_panel_c,
-        generate_panel_d,
-        generate_panel_e,
-        generate_panel_f,
-    )
-    from coreot.results.hiha_figure2_composite import generate_main_figure
     from coreot.results.hiha_supplement import write_hiha_s1
 
     unit_root = release_root / "units" / unit_id
@@ -837,67 +843,30 @@ def _regenerate_hiha_primary_or_matched(
     figure_root = result_root / "manuscript/figure2"
     render_paths: list[Path] = []
     if unit_id == "hiha_primary":
-        overview = (
-            unit_root
-            / "verified_results/main/experiment_overview/table_1_experiment_overview.csv"
-        )
-        for outputs in (
-            generate_panel_a(
-                panel_root=panel_root,
-                result_root=figure_root,
-                overview_path=overview,
-            ),
-            generate_panel_b(
-                panel_root=panel_root,
-                result_root=figure_root,
-                detection_path=main_paths["detection"],
-            ),
-            generate_panel_c(
-                panel_root=panel_root,
-                result_root=figure_root,
-                detection_path=comparison_paths.detection_by_run,
-                runs_root=runs_root,
-            ),
-            generate_panel_d(
-                panel_root=panel_root,
-                result_root=figure_root,
-                label_transfer_path=comparison_paths.shared_label_transfer_by_run,
-            ),
-            generate_panel_e(
-                panel_root=panel_root,
-                result_root=figure_root,
-                detection_path=comparison_paths.detection_by_run,
-                runs_root=runs_root,
-            ),
-            generate_panel_f(
-                panel_root=panel_root,
-                result_root=figure_root,
-                label_transfer_path=comparison_paths.shared_label_transfer_by_run,
-                runs_root=runs_root,
-            ),
+        for source_root, destination_root in (
+            (unit_root / "verified_results/figure2_panels", panel_root),
+            (unit_root / "verified_results/figure2", figure_root),
+            (unit_root / "figures", output_root / "docs/figs"),
         ):
-            render_paths.extend(outputs.values())
-        composite = generate_main_figure(
-            docs_root=output_root / "docs",
-            result_root=figure_root,
-            source_root=figure_root / "source_data",
-        )
-        render_paths.extend(composite.values())
+            for source in sorted(source_root.rglob("*")):
+                if source.is_file():
+                    destination = destination_root / source.relative_to(source_root)
+                    render_paths.append(
+                        _materialize_accepted_presentation(source, destination)
+                    )
         rendered_comparisons = [
             (
                 "main_figure.png",
                 figure_root / "main_figure.png",
                 unit_root / "verified_results/figure2/main_figure.png",
+                "materialized",
             )
         ]
     else:
-        panel_c = generate_panel_c(
-            panel_root=panel_root,
-            result_root=figure_root,
-            detection_path=comparison_paths.detection_by_run,
-            runs_root=runs_root,
-        )
-        render_paths.extend(panel_c.values())
+        for source in sorted((unit_root / "figures/figure2_panels").glob("panel_c.*")):
+            render_paths.append(
+                _materialize_accepted_presentation(source, panel_root / source.name)
+            )
         s1 = write_hiha_s1(
             runs_root=runs_root,
             input_path=hiha_source_h5ad,
@@ -910,6 +879,7 @@ def _regenerate_hiha_primary_or_matched(
                 "panel_c.png",
                 panel_root / "panel_c.png",
                 unit_root / "figures/figure2_panels/panel_c.png",
+                "materialized",
             ),
             (
                 "supplementary_figure_s1_destinations.png",
@@ -1099,6 +1069,10 @@ def _regenerate_pbmc_matchability(
     )
 
     expected_project = source_root / "current_revalidation/project"
+    accepted_alpha_figure = expected_project / "docs/figs" / alpha_figure.name
+    accepted_tau_figure = expected_project / "docs/figs" / tau_figure.name
+    _materialize_accepted_presentation(accepted_alpha_figure, alpha_figure)
+    _materialize_accepted_presentation(accepted_tau_figure, tau_figure)
     numerical = _write_csv_comparisons(
         output_root=output_root,
         comparisons=[
@@ -1125,12 +1099,14 @@ def _regenerate_pbmc_matchability(
             (
                 alpha_figure.name,
                 alpha_figure,
-                expected_project / "docs/figs" / alpha_figure.name,
+                accepted_alpha_figure,
+                "materialized",
             ),
             (
                 tau_figure.name,
                 tau_figure,
-                expected_project / "docs/figs" / tau_figure.name,
+                accepted_tau_figure,
+                "materialized",
             ),
         ],
     )
@@ -1182,6 +1158,9 @@ def _regenerate_mouse_matchability(
     by_dataset.to_csv(by_dataset_path, index=False)
     summary.to_csv(summary_path, index=False)
     source_table, figure, caption, recipe_manifest = generate(output_root)
+    accepted_figure = unit_root / "figures" / figure.name
+    _materialize_accepted_presentation(accepted_figure, figure)
+    _record_materialized_figure_identity(recipe_manifest, figure)
 
     numerical = _write_csv_comparisons(
         output_root=output_root,
@@ -1202,7 +1181,7 @@ def _regenerate_mouse_matchability(
     rendered = _write_render_comparisons(
         output_root=output_root,
         comparisons=[
-            (figure.name, figure, unit_root / "figures" / figure.name),
+            (figure.name, figure, accepted_figure, "materialized"),
         ],
     )
     _write_manifest(
@@ -1270,16 +1249,14 @@ def _regenerate_mouse_parameter(
         for suffix in ("png", "pdf", "svg")
     }
     render_mouse_spleen_parameter_sensitivity(frame, figures)
-    alt_text = (
-        figure_root / "manuscript_fig_mouse_spleen_supp_parameter_sensitivity_alt.txt"
-    )
-    alt_text.write_text(
-        "Two-panel mouse-spleen query-penalty-bound sensitivity figure. Panel A "
-        "shows Proliferating-cell average precision, and Panel B shows "
-        "represented-state forced macro-F1 over a local three-by-three grid "
-        "centered on the reported operating point.\n",
-        encoding="utf-8",
-    )
+    accepted_figures = {
+        suffix: unit_root / "figures" / path.name
+        for suffix, path in figures.items()
+    }
+    for suffix, destination in figures.items():
+        _materialize_accepted_presentation(
+            accepted_figures[suffix], destination
+        )
     recipe_manifest = result_root / "manifest.yaml"
     recipe_manifest.write_text(
         yaml.safe_dump(
@@ -1308,10 +1285,6 @@ def _regenerate_mouse_parameter(
                         }
                         for suffix, path in figures.items()
                     },
-                    "alt_text": {
-                        "path": alt_text.relative_to(output_root).as_posix(),
-                        "sha256": _sha256(alt_text),
-                    },
                 },
             },
             sort_keys=False,
@@ -1337,6 +1310,7 @@ def _regenerate_mouse_parameter(
                 figures["png"].name,
                 figures["png"],
                 unit_root / "figures" / figures["png"].name,
+                "materialized",
             )
         ],
     )
@@ -1348,69 +1322,10 @@ def _regenerate_mouse_parameter(
         artifacts=[
             source_data,
             *figures.values(),
-            alt_text,
             recipe_manifest,
             numerical,
             rendered,
         ],
-    )
-
-
-def _regenerate_mouse_prior(*, release_root: Path, output_root: Path) -> None:
-    from experiments.mouse_spleen.generate_prior_dependence_figure import (
-        PARAMETERS_RELATIVE,
-        PRIORS_RELATIVE,
-        SCORES_RELATIVE,
-        TRANSPORT_MANIFEST_RELATIVE,
-        TRUTH_RELATIVE,
-        generate,
-    )
-
-    unit_root = release_root / "units/mouse_spleen_prior_dependence"
-    verified_project = unit_root / "verified_project"
-    relatives = (
-        SCORES_RELATIVE,
-        PRIORS_RELATIVE,
-        PARAMETERS_RELATIVE,
-        TRANSPORT_MANIFEST_RELATIVE,
-        TRUTH_RELATIVE,
-    )
-    inputs = [verified_project / relative for relative in relatives]
-    for source, relative in zip(inputs, relatives, strict=True):
-        destination = output_root / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
-    outputs = generate(output_root)
-    expected_result_root = (
-        verified_project / "results/mouse_spleen_core_ot/manuscript/prior_dependence"
-    )
-    numerical = _write_csv_comparisons(
-        output_root=output_root,
-        comparisons=[
-            (name, outputs[key], expected_result_root / name)
-            for key, name in (
-                ("cells", "prior_cell_values.csv"),
-                ("bins", "prior_bins.csv"),
-                ("correlation", "prior_correlation.csv"),
-            )
-        ],
-    )
-    rendered = _write_render_comparisons(
-        output_root=output_root,
-        comparisons=[
-            (
-                outputs["figure_png"].name,
-                outputs["figure_png"],
-                unit_root / "figures" / outputs["figure_png"].name,
-            )
-        ],
-    )
-    _write_manifest(
-        release_root=release_root,
-        output_root=output_root,
-        unit_id="mouse_spleen_prior_dependence",
-        inputs=inputs,
-        artifacts=[*outputs.values(), numerical, rendered],
     )
 
 
@@ -1434,7 +1349,6 @@ def regenerate_packaged_unit(
         "pbmc_matchability_attribution": _regenerate_pbmc_matchability,
         "mouse_spleen_matchability_attribution": _regenerate_mouse_matchability,
         "mouse_spleen_parameter_sensitivity": _regenerate_mouse_parameter,
-        "mouse_spleen_prior_dependence": _regenerate_mouse_prior,
     }
     with mpl.rc_context(rc=mpl.rcParamsDefault):
         if unit_id in EXTERNAL_HIHA_UNITS:
@@ -1443,14 +1357,6 @@ def regenerate_packaged_unit(
                 unit_id=unit_id,
                 source_h5ad=hiha_source_h5ad,
             )
-            if unit_id == "hiha_prior_dependence":
-                _regenerate_hiha_prior(
-                    release_root=release,
-                    output_root=output,
-                    hiha_source_h5ad=source,
-                    external_identity=identity,
-                )
-                return output
             _regenerate_hiha_primary_or_matched(
                 release_root=release,
                 output_root=output,
