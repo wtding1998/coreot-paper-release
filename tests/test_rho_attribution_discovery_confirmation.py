@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -319,29 +318,6 @@ def test_mouse_alpha5_retained_cli_dispatches_without_running_fits(
     assert calls[0]["jobs"] == 1
     assert calls[0]["retain_fit_artifacts"] is True
     assert calls[0]["configurations"] == mouse_alpha5_retained_configurations()
-
-
-def test_focused_discovery_result_manifest_hashes_current_artifacts() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    analysis_root = (
-        project_root
-        / "results/HIHA_DC/sensitivity/rho_attribution_discovery_confirmation"
-    )
-    result = yaml.safe_load(
-        (
-            analysis_root / "design/alpha0_focused025_125_result.yaml"
-        ).read_text(encoding="utf-8")
-    )
-
-    assert result["status"] == "no_discovery_supported_configuration"
-    assert result["n_supported_cells"] == 0
-    for artifact in ("design", "by_split", "summary", "figure"):
-        path = Path(result["artifacts"][artifact])
-        assert path.is_file()
-        assert (
-            hashlib.sha256(path.read_bytes()).hexdigest()
-            == result["artifacts"][f"{artifact}_sha256"]
-        )
 
 
 def test_locked_coarse_grid_sizes_and_relative_effect() -> None:

@@ -91,9 +91,6 @@ from coreot.results.hiha import (
     build_hiha_detection_by_run,
     build_hiha_rescue,
 )
-from coreot.results.main_figure_external_baselines import (
-    prepare_hiha_candidate_sources,
-)
 
 HIHA_AUTHORITATIVE_FIXTURE_RUNS = Path("tests/fixtures/hiha_review_v3_runs")
 
@@ -1605,28 +1602,6 @@ def test_panel_c_rejects_non_normalized_conditional_probabilities(
         )
 
 
-def test_generate_panel_e_writes_truth_and_six_top_n_maps(
-    tmp_path: Path,
-) -> None:
-    paths = prepare_hiha_candidate_sources(
-        package_root=Path("results/uot_baseline_pilot/portable_decision_package_v1"),
-        canonical_source_root=Path("results/HIHA_DC/manuscript/figure2/source_data"),
-        candidate_figure_root=tmp_path / "figure2",
-        authoritative_runs_root=HIHA_AUTHORITATIVE_FIXTURE_RUNS,
-    )
-    cells = pd.read_csv(paths["source_root"] / "panel_d_umap_cells.csv")
-    assert set(cells["seed"]) == {REPRESENTATIVE_SEED}
-    assert set(cells["map_id"]) == {map_id for map_id, _, _ in PANEL_E_MAPS}
-    assert not cells.duplicated(["held_out_label", "map_id", "cell_id"]).any()
-    method_cells = cells.loc[cells["map_id"].ne("truth")]
-    assert method_cells.loc[method_cells["is_selected"], "is_within_cdc2"].all()
-    selected = method_cells.groupby(["held_out_label", "map_id"])["is_selected"].sum()
-    held_out = (
-        cells.loc[cells["map_id"].eq("truth")].groupby("held_out_label")["is_held_out_truth"].sum()
-    )
-    assert all(count == held_out.loc[endpoint] for (endpoint, _), count in selected.items())
-
-
 def test_generate_panel_d_writes_exact_represented_state_rows(
     tmp_path: Path,
 ) -> None:
@@ -1700,43 +1675,6 @@ def test_panel_e_rejects_incomplete_endpoint_seed_keys(tmp_path: Path) -> None:
             result_root=tmp_path / "results",
             label_transfer_path=label_transfer,
         )
-
-
-def test_generate_panel_f_writes_label_assignment_maps(
-    tmp_path: Path,
-) -> None:
-    paths = prepare_hiha_candidate_sources(
-        package_root=Path("results/uot_baseline_pilot/portable_decision_package_v1"),
-        canonical_source_root=Path("results/HIHA_DC/manuscript/figure2/source_data"),
-        candidate_figure_root=tmp_path / "figure2",
-        authoritative_runs_root=HIHA_AUTHORITATIVE_FIXTURE_RUNS,
-    )
-    cells = pd.read_csv(paths["source_root"] / "panel_f_label_assignment_cells.csv")
-    summary = pd.read_csv(paths["source_root"] / "panel_f_label_assignment_summary.csv")
-    assert len(summary) == 2 * len(PANEL_D_METHODS)
-    assert set(cells["map_id"]) == {map_id for map_id, _ in PANEL_F_MAPS}
-    assert not cells.duplicated(["held_out_label", "map_id", "cell_id"]).any()
-    coordinate_counts = cells.groupby(["held_out_label", "cell_id"])[["umap_1", "umap_2"]].nunique()
-    assert coordinate_counts.eq(1).all().all()
-    held_out = cells.loc[cells["is_held_out_state"]]
-    assert held_out["displayed_assignment"].eq("Held-out state (not evaluated)").all()
-    represented = cells.loc[cells["is_represented_state"]]
-    assert set(represented["displayed_assignment"]) <= set(PANEL_F_LABEL_COLORS)
-    assert np.allclose(summary["forced_accuracy"], summary["panel_e_forced_accuracy"])
-    assert np.allclose(summary["forced_macro_f1"], summary["panel_e_forced_macro_f1"])
-    assert paths["manifest"].is_file()
-
-
-def test_panel_f_assignments_reproduce_panel_d_sealed_metrics(tmp_path: Path) -> None:
-    paths = prepare_hiha_candidate_sources(
-        package_root=Path("results/uot_baseline_pilot/portable_decision_package_v1"),
-        canonical_source_root=Path("results/HIHA_DC/manuscript/figure2/source_data"),
-        candidate_figure_root=tmp_path / "figure2",
-        authoritative_runs_root=HIHA_AUTHORITATIVE_FIXTURE_RUNS,
-    )
-    summary = pd.read_csv(paths["source_root"] / "panel_f_label_assignment_summary.csv")
-    assert np.allclose(summary["forced_accuracy"], summary["panel_e_forced_accuracy"])
-    assert np.allclose(summary["forced_macro_f1"], summary["panel_e_forced_macro_f1"])
 
 
 def test_generate_main_figure_writes_a_to_f_composite(tmp_path: Path) -> None:

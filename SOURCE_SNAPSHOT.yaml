@@ -30,3 +30,9 @@ boundaries:
   includes_untracked_working_tree_files: false
   evidence_archive_stored_in_git: false
   publication_authorized: false
+release_checkout_updates:
+  - date: '2026-09-23'
+    scope: submission documentation, citation metadata, and self-contained release tests
+    production_code_changed: false
+    tests_excluded: checks requiring external results, development configs, biological data, or manuscript files
+    recovery: Git history before the release-test cleanup

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from itertools import combinations_with_replacement
-from pathlib import Path
 
 import pandas as pd
 import pytest
-import yaml
 
 from experiments.missing_celltype.generate_hiha_rho_tau_alpha0_figure import (
     EFFECT_COLUMNS,
@@ -73,30 +71,3 @@ def test_focused_surface_requires_both_complete_triangles() -> None:
 def test_focused_surface_rejects_missing_cell() -> None:
     with pytest.raises(ValueError, match="incorrect triangular coverage"):
         focused_surface(_synthetic_summary().iloc[:-1])
-
-
-def test_generated_surface_uses_four_relative_metric_rows() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    analysis_root = (
-        project_root
-        / "results/HIHA_DC/sensitivity/rho_attribution_discovery_confirmation"
-    )
-    source = pd.read_csv(
-        analysis_root / "tables/rho_tau_surface_alpha0_range025_125.csv"
-    )
-    assert set(RELATIVE_EFFECT_COLUMNS) <= set(source.columns)
-    manifest = yaml.safe_load(
-        (
-            analysis_root / "design/rho_tau_surface_alpha0_range025_125.yaml"
-        ).read_text(encoding="utf-8")
-    )
-    assert manifest["display"]["units"] == "percent"
-    assert (
-        manifest["display"]["aggregation"]
-        == "mean_of_split_level_relative_differences"
-    )
-    caption = (
-        project_root
-        / "docs/figs/manuscript_supp_rho_attribution_hiha_alpha0_caption.md"
-    ).read_text(encoding="utf-8")
-    assert "paired relative heterogeneous-minus-mean-matched-uniform" in caption

@@ -24,8 +24,9 @@ scientific revalidation or authorization to publish data.
 - [ ] Attach the complete evidence archive and Supplementary Data files using
   the approved delivery mechanism, with checksums and actual access instructions.
 - [ ] Obtain an archival DOI and update citation/access metadata.
-- [ ] Complete the full evidence-dependent reproduction checks with the
-  declared inputs. Passing source tests alone does not satisfy this item.
+- [ ] Complete evidence-backed reproduction using the declared inputs and
+  development-repository validation checks. External-asset tests are excluded
+  from this source release; passing release tests does not satisfy this item.
 
 ## Publication
 
@@ -39,17 +40,16 @@ scientific revalidation or authorization to publish data.
 Checks were run on 2026-09-23 against this checkout using the existing
 development environment (Python 3.12), not a newly installed clean environment:
 
-- [x] `pytest --collect-only -q`: completed successfully.
-- [x] `pytest tests/test_pbmc_celltypist_candidate.py -q`: all nine tests passed.
+- [x] Removed tests requiring external result tables, manuscript assets,
+  biological data and development-only configs, plus their unused fixtures
+  and imports. The removed checks remain recoverable from Git history.
 - [x] `ruff check --no-cache src experiments tests`: passed.
 - [x] `python -m paper-release.workflows.reproduce --help`: passed with this
   checkout's `src` on the Python import path. Invoke as a module because the
   dispatcher uses relative imports.
-- [x] Tried the full `pytest` suite: it did not pass. The reported failures
-  and setup errors require absent `results/` evidence, `docs/` manuscript
-  assets, or `experiments/mouse_spleen/configs/mouse_spleen_core_ot.yaml`.
-  Examples include sealed figure inputs, PBMC figure tables, the current
-  supplement and mouse-spleen configuration. These are not supplied by a
-  source-only clone; this run is not a complete reproduction certificate.
+- [x] Full remaining release suite: `pytest -o addopts='' -q` reports
+  **168 passed**, with one non-failing joblib CPU-count detection warning.
+  No tests were skipped. This validates the retained code tests, not the
+  removed manuscript/evidence checks.
 - [ ] A fresh `uv sync --locked` environment and evidence-backed full run
   remain unverified in this documentation update.

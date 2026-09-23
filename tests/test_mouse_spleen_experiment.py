@@ -14,7 +14,6 @@ from experiments.mouse_spleen.pipeline import (
     MouseSpleenConfigError,
     _fit_source_priors,
     _label_transfer_metrics,
-    _transport_method_configs,
     run_stage,
 )
 
@@ -385,83 +384,6 @@ def test_natural_prior_decouples_anchor_and_matchability_classifiers() -> None:
         "rho=clip(0.5*matchability_classifier_entropy_confidence+"
         "0.5*query_neighbor_agreement,0.45,0.55)"
     }
-
-
-def test_canonical_natural_prior_config_uses_conservative_dynamic_range() -> None:
-    config = yaml.safe_load(
-        Path("experiments/mouse_spleen/configs/mouse_spleen_core_ot.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-    natural_priors = config["experiments"]["natural_mismatch"]["priors"]
-    assert natural_priors == {
-        "anchor_classifier": {
-            "C": 1.0,
-            "max_iter": 5000,
-            "random_state": 20260713,
-        },
-        "matchability_classifier": {
-            "C": 10.0,
-            "max_iter": 5000,
-            "random_state": 20260713,
-        },
-        "matchability": {
-            "query_neighbor_k": 10,
-            "confidence_weight": 0.5,
-            "neighbor_weight": 0.5,
-            "clip": [0.45, 0.55],
-        },
-    }
-    assert config["priors"]["broad_classifier"]["C"] == 1.0
-    assert config["priors"]["matchability"]["query_neighbor_k"] == 15
-    assert config["experiments"]["natural_mismatch"]["coreot_full"] == {
-        "tau_min": 3,
-        "tau_max": 5,
-        "tau_target": 8,
-        "alpha": 40,
-        "max_iterations": 5000,
-    }
-    assert config["experiments"]["natural_mismatch"]["mean_matched_primary_factorial"] is True
-    assert config["experiments"]["natural_mismatch"]["endpoints"]["Proliferating"] == {
-        "uniform_uot_tau_source": 4.0
-    }
-    assert config["experiments"]["natural_mismatch"]["methods"] == [
-        "nn",
-        "uniform_uot",
-        "coreot_constant_tau",
-        "coreot_match_only",
-        "coreot_full",
-        "prior_only",
-    ]
-
-
-def test_proliferating_uniform_tau_override_preserves_mean_matched_ablation() -> None:
-    config = yaml.safe_load(
-        Path("experiments/mouse_spleen/configs/mouse_spleen_core_ot.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-    natural = config["experiments"]["natural_mismatch"]
-    methods = _transport_method_configs(
-        config,
-        natural["methods"],
-        coreot_full_override=natural["coreot_full"],
-        mean_matched_factorial=natural["mean_matched_primary_factorial"],
-        uniform_uot_tau_source=natural["endpoints"]["Proliferating"][
-            "uniform_uot_tau_source"
-        ],
-    )
-    uniform = next(item for item in methods if item["name"] == "uniform_uot")
-    compatibility = next(
-        item for item in methods if item["name"] == "coreot_constant_tau"
-    )
-
-    assert uniform["tau_source"] == 4.0
-    assert "matched_tau_min" not in uniform
-    assert "matched_tau_max" not in uniform
-    assert compatibility["tau_source"] == "matched_coreot_mean"
-    assert compatibility["matched_tau_min"] == 3.0
-    assert compatibility["matched_tau_max"] == 5.0
 
 
 def test_prepare_task_family_writes_bounded_deterministic_smoke_sample(

@@ -70,20 +70,20 @@ uv sync --locked
 The complete evidence archive includes a separate release README with the
 clean-room artifact-regeneration procedure and its external-input identities.
 
-Test collection, the CellTypist contract tests, and lint can be run without
-the evidence archive:
+The release test suite uses temporary or in-memory fixtures and does not
+require the external evidence archive:
 
 ```bash
-uv run pytest --collect-only -q
-uv run pytest tests/test_pbmc_celltypist_candidate.py -q
+uv run pytest
 uv run ruff check --no-cache src experiments tests
 ```
 
-Tests that compare canonical manuscript figures, tables, and package members
-require the checksum-addressed evidence archive. They are not expected to pass
-against the source-only checkout without those declared inputs and the
-associated development-repository configs and manuscript assets. See the
-validation notes in RELEASE_READINESS.md before interpreting a full-suite run.
+Tests that require saved result tables, development-only configurations,
+biological datasets or manuscript files have been removed from this release
+checkout. They remain recoverable from Git history and in the development
+repository. Passing the release tests checks code behavior with fixtures; it
+does not certify reproduction of the manuscript's numerical results. See
+RELEASE_READINESS.md for the validation scope.
 
 For manuscript-artifact regeneration, first obtain and extract the complete
 evidence archive, then follow its README. The dispatcher is

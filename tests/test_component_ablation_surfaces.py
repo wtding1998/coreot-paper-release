@@ -218,22 +218,6 @@ def test_component_ablation_cli_dispatches_retention_flag(
     assert calls[0]["retained_only"] is False
 
 
-def test_mouse_spleen_component_figures_use_two_by_two_layout() -> None:
-    manifest = yaml.safe_load(
-        Path(
-            "results/mouse_spleen_core_ot/natural_mismatch/sensitivity/"
-            "component_ablation_proliferating/manifest.yaml"
-        ).read_text(encoding="utf-8")
-    )
-    assert manifest["metadata"]["heatmap_layout"] == "2_by_2_row_major"
-    assert manifest["metadata"]["heatmap_metrics"] == [
-        "auprc",
-        "auroc",
-        "forced_accuracy",
-        "forced_macro_f1",
-    ]
-
-
 def test_pbmc_detection_is_within_celltype_and_transfer_uses_shared_cells() -> None:
     truth = pd.DataFrame(
         {
@@ -285,18 +269,6 @@ def test_hiha_detection_is_restricted_to_cdc2() -> None:
     assert metrics["evaluation_scope"] == "within_cdc2"
     assert metrics["n_detection"] == 4
     assert np.isclose(metrics["auroc"], 1.0)
-
-
-def test_generated_pbmc_surfaces_use_calibrated_provider_rho() -> None:
-    path = (
-        Path(__file__).resolve().parents[1]
-        / "results/PBMC/sensitivity/component_ablation/tables/"
-        "component_ablation_by_seed.csv"
-    )
-    frame = pd.read_csv(path)
-    assert len(frame) == 600
-    assert frame["source_priors_sha256"].astype(str).str.count(r"\+").eq(2).all()
-    assert frame["converged"].all()
 
 
 def test_hiha_retained_aggregate_excludes_only_archived_compatibility_tau() -> None:

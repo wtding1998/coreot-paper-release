@@ -6,12 +6,8 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-import yaml
 
 from coreot.results.hiha_parameter_sensitivity import (
-    H1_CHECKSUMS_RELATIVE,
-    H1_SPLIT_METRICS_RELATIVE,
-    H1_VERIFICATION_RELATIVE,
     HLA_TAU_MAX,
     HLA_TAU_MIN,
     ISG_TAU_MAX,
@@ -198,54 +194,3 @@ def test_renders_all_formats_without_selected_setting_markers(tmp_path: Path) ->
         for suffix, path in outputs.items()
     } == first_hashes
     assert "<dc:date>" not in outputs["svg"].read_text(encoding="utf-8")
-
-
-def test_generated_artifacts_match_verified_sources() -> None:
-    isg_path = (
-        PROJECT_ROOT / "results/HIHA_DC/sensitivity/isg_tau_range_target1_alpha025_discovery/"
-        "tables/discovery_by_split.csv"
-    )
-    _, expected = collect_hiha_parameter_sensitivity_from_h1(
-        hla_split_metrics_path=PROJECT_ROOT / H1_SPLIT_METRICS_RELATIVE,
-        hla_verification_path=PROJECT_ROOT / H1_VERIFICATION_RELATIVE,
-        hla_checksums_path=PROJECT_ROOT / H1_CHECKSUMS_RELATIVE,
-        isg_path=isg_path,
-    )
-    observed = pd.read_csv(
-        PROJECT_ROOT / "results/HIHA_DC/figures/data/hiha_parameter_sensitivity_summary.csv"
-    )
-    pd.testing.assert_frame_equal(observed, expected, check_exact=False, atol=1.0e-15)
-
-    manifest = yaml.safe_load(
-        (
-            PROJECT_ROOT / "results/HIHA_DC/figures/hiha_parameter_sensitivity_manifest.yaml"
-        ).read_text(encoding="utf-8")
-    )
-    assert manifest["sources"]["hla_h1_split_metrics"]["path"] == str(H1_SPLIT_METRICS_RELATIVE)
-    assert manifest["sources"]["hla_h1_verification_report"]["path"] == str(
-        H1_VERIFICATION_RELATIVE
-    )
-    assert manifest["sources"]["hla_h1_checksums"]["path"] == str(H1_CHECKSUMS_RELATIVE)
-    assert manifest["selected_settings"]["HLA-DRhi cDC2"] == [2.5, 3.0]
-    assert "alt_text" not in manifest["artifacts"]
-    assert not (
-        PROJECT_ROOT / "docs/figs/manuscript_fig_hiha_supp_parameter_sensitivity_alt.txt"
-    ).exists()
-    assert manifest["rendering_metadata_policy"] == {
-        "svg_hash_salt": "coreot-hiha-parameter-sensitivity",
-        "svg_date_removed": True,
-        "pdf_creation_and_modification_dates_removed": True,
-    }
-    assert manifest["interpretation"]["hla_selection_performed"] is False
-    assert (
-        manifest["interpretation"]["cross_endpoint_sensitivity_magnitude_comparison_supported"]
-        is False
-    )
-
-    supplement = (PROJECT_ROOT / "docs/manuscript_supp.md").read_text(encoding="utf-8")
-    section = supplement.split(
-        "#### S2.6.3. Query-penalty sensitivity",
-        maxsplit=1,
-    )[1].split("### S2.7.", maxsplit=1)[0]
-    assert "Stars and white outlines" not in section
-    assert "larger empirical range" in section
