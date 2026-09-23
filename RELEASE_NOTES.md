@@ -1,4 +1,18 @@
-# Release candidate 2026-08-29
+# Release notes
+
+## Submission documentation update — 2026-09-23
+
+- Align the manuscript title and explanatory terminology with the current BiB
+  submission draft; document the author order and corresponding email.
+- Add citation metadata and a release-readiness checklist.
+- Explain external input acquisition, pending Supplementary Data delivery,
+  and the distinction between saved-output regeneration and independent fitting.
+- Retain the original source checkpoint and evidence inventories. No model,
+  fitted result, checksum-covered evidence file or historical tag is replaced.
+- The repository remains private; this update is not a public release or DOI
+  deposit. Copyright attribution still requires author confirmation.
+
+## Release candidate 2026-08-29
 
 This source-only candidate is bound to the following technical authorities:
 

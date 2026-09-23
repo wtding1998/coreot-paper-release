@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "Please cite this repository when using the CoRe-OT source release. Manuscript publication details and an archival DOI are pending."
+type: software
+title: "CoRe-OT: unbalanced optimal transport for single-cell mapping under incomplete reference coverage"
+authors:
+  - family-names: Lin
+    given-names: Zhili
+    affiliation: "Department of Hematology, The First Affiliated Hospital of Wenzhou Medical University, Wenzhou, Zhejiang, China"
+    orcid: "https://orcid.org/0009-0003-9788-530X"
+  - family-names: Jin
+    given-names: Zhouxiang
+    affiliation: "Department of Hepatobiliary Surgery, The Second Affiliated Hospital and Yuying Children's Hospital of Wenzhou Medical University, Wenzhou, Zhejiang, China"
+    email: wzjinzx@163.com
+repository-code: "https://github.com/wtding1998/coreot-paper-release"
+keywords:
+  - single-cell reference mapping
+  - unbalanced optimal transport
+  - incomplete reference coverage
+  - label transfer
