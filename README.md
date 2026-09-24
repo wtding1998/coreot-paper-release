@@ -1,142 +1,120 @@
-# CoRe-OT paper release
+# CoRe-OT
 
-This is the private staging repository for the source-code and reproducibility
-release accompanying the manuscript **“CoRe-OT: unbalanced optimal transport
-for single-cell mapping under incomplete reference coverage.”** The manuscript
-is being prepared for submission to *Briefings in Bioinformatics* as a
-Problem solving protocol. Documentation was updated on 2026-09-23; the
-underlying source checkpoint remains the 2026-08-29 candidate.
+Source code for **CoRe-OT: unbalanced optimal transport for single-cell mapping under incomplete reference coverage**.
 
-The authors plan to make this repository public at submission. It is currently
-private, and the complete evidence archive and archival DOI are not yet
-available. See [release readiness](RELEASE_READINESS.md) for remaining checks.
+CoRe-OT (correspondence-aware reference mapping by optimal transport) uses prior-informed unbalanced optimal transport to assess query-cell support in a single-cell reference. Its weak-correspondence scores depend on the fitted model and inputs; they are not probabilities of biological absence.
 
-CoRe-OT (correspondence-aware reference mapping by optimal transport) is an
-asymmetric unbalanced optimal-transport framework that separates reference
-destination from fitted mass retention in single-cell reference mapping.
-Query-marginal deficit is conditional on the fitted model and inputs; it is
-not a calibrated probability that a biological state is absent from the reference.
+![Overview of the CoRe-OT workflow](docs/figs/manuscript_fig_method.png)
 
-## Repository contents
+## Installation
 
-- `src/`, `experiments/`, `tests/`, and `verification/` contain the validated
-  paper-release source snapshot and its focused verification code. Historical
-  validation records do not establish that every analysis has been rerun for
-  the current manuscript.
-- `experiments/pbmc_state/rerun_pbmc_celltypist_centered.py` contains the
-  fail-closed current-environment CellTypist reproduction entry point, with its
-  contract tests in `tests/test_pbmc_celltypist_candidate.py`.
-- `paper-release/workflows/` contains the artifact-regeneration dispatcher and
-  manuscript-artifact map.
-- `paper-release/provenance/` contains the release registry, file inventory,
-  external-dependency records, and checksum ledger for the complete evidence
-  archive.
-- `SOURCE_SNAPSHOT.yaml` records how this source-only checkout was derived
-  from the validated evidence candidate and the tagged 2026-08-29 source.
-
-## Release identity
-
-- Source checkpoint: `wtding1998/CoReOT` tag
-  `release-candidate-2026-08-29`, commit
-  `15431b1b506103abb5d4375b03d739205bf930fb`.
-- Validated evidence authority:
-  `2026-08-28-current-executable-r4` (16 verified units).
-- Public-source candidate tag: `release-candidate-2026-08-29`.
-
-The 2026-08-29 CellTypist work adds a reproducible full-refit verification
-path and fail-closed comparisons. It does not replace or silently rewrite the
-checksum-covered scientific members of the validated evidence authority.
-
-The complete evidence units are intentionally not stored in ordinary Git
-history. After final authorization, a checksum-addressed evidence archive will
-be attached to a tagged GitHub Release. The provenance checksum ledger applies
-to that complete archive, not to this source-only checkout.
-
-Do not run the evidence checksum ledger against this checkout: its paths
-refer to the complete evidence archive. The archived manifests retain their
-original terminology and paths to preserve provenance. The current manuscript
-also retains the qualification that scDOT and TACCO-OT comparisons use saved
-predictions without a current independent full refit.
-
-## Environment
-
-The locked project supports Python 3.11 and 3.12. With `uv` installed, create
-the source-development environment with:
+Requires Python 3.11 or 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
+git clone https://github.com/wtding1998/coreot-paper-release.git
+cd coreot-paper-release
 uv sync --locked
 ```
 
-The complete evidence archive includes a separate release README with the
-clean-room artifact-regeneration procedure and its external-input identities.
-
-The release test suite uses temporary or in-memory fixtures and does not
-require the external evidence archive:
+Inspect the pipeline and run the code tests:
 
 ```bash
+uv run coreot steps
 uv run pytest
-uv run ruff check --no-cache src experiments tests
 ```
 
-Tests that require saved result tables, development-only configurations,
-biological datasets or manuscript files have been removed from this release
-checkout. They remain recoverable from Git history and in the development
-repository. Passing the release tests checks code behavior with fixtures; it
-does not certify reproduction of the manuscript's numerical results. See
-RELEASE_READINESS.md for the validation scope.
+## Usage
 
-For manuscript-artifact regeneration, first obtain and extract the complete
-evidence archive, then follow its README. The dispatcher is
-`paper-release/workflows/reproduce.py`; inspect its options with:
+The Python solver accepts query–reference candidate pairs, their costs, prescribed cell masses and marginal penalties. In the API, `source` means query and `target` means reference. Save this small synthetic example as `example.py` and run `uv run python example.py`:
+
+```python
+import numpy as np
+from coreot.transport.sinkhorn import solve_sparse_unbalanced_sinkhorn
+
+# Two query cells and two reference cells; include every candidate pair.
+query_index = np.array([0, 0, 1, 1])
+reference_index = np.array([0, 1, 0, 1])
+distance = np.array([0.1, 1.0, 0.8, 0.2])  # scaled embedding distances
+query_anchor = np.array(["A", "B"])
+reference_anchor = np.array(["A", "B"])
+anchor_cost = (query_anchor[query_index] != reference_anchor[reference_index]).astype(float)
+rho = np.array([0.9, 0.4])  # query-cell matchability priors in [0, 1]
+query_mass = np.full(2, 0.5)
+reference_mass = np.full(2, 0.5)
+
+fit = solve_sparse_unbalanced_sinkhorn(
+    source_index=query_index,
+    target_index=reference_index,
+    cost=distance + 0.5 * anchor_cost,
+    source_mass=query_mass,
+    target_mass=reference_mass,
+    epsilon=0.05,
+    tau_source=0.05 + (1.0 - 0.05) * rho,
+    tau_target=np.full(2, 1.0),
+    max_iter=2000,
+    tol=1e-6,
+)
+deficit = np.maximum(query_mass - fit.source_marginal, 0.0) / query_mass
+print("Converged:", fit.converged)
+print("Candidate-pair transport weights:", fit.coupling)
+print("Query-marginal deficit:", deficit)
+```
+
+For your own data, replace the candidate indices, scaled distances, broad-anchor labels, matchability priors and cell masses; indices must follow the corresponding cell order. This example uses hard broad-anchor labels with unit confidence and illustrative parameter values. Larger deficit indicates weaker fitted reference support. Check `fit.converged` before interpreting the output; this is a solver example, not a complete preprocessing or label-transfer workflow.
+
+## Data and reproducibility
+
+Run all commands from the cloned repository root. Biological data are not included in Git.
+
+### Download inputs
+
+Create the input directories:
 
 ```bash
-uv run python -m paper-release.workflows.reproduce --help
+mkdir -p data/raw data/models/celltypist data/derived/hiha_dc
 ```
 
-It requires `--release-root` pointing to the extracted evidence release and
-`--output-root` for generated files. Cloning this repository alone does not
-provide the fitted outputs needed for that workflow. Regenerating artifacts
-from saved fits is distinct from independently rerunning model fitting.
+Download each file below and save it at the indicated path, relative to the repository root. These are the acquisition URLs recorded in the [external-data manifest](paper-release/provenance/external_dependencies.csv); their current remote availability has not been reverified.
 
-## External-data boundary
+| Input | Download | Save as |
+| --- | --- | --- |
+| HIHA dendritic cells | [Allen Institute](https://allenimmunology.org/public/publication/download/84792154-cdfb-42d0-8e42-39e210e980b4/filesets/568ad40c-516a-4646-9426-bdcd7029c1f5/human_immune_health_atlas_dc.h5ad) | `data/raw/human_immune_health_atlas_dc.h5ad` |
+| AIFI Level-2 CellTypist model | [Allen Institute](https://allenimmunology.org/public/publication/download/84792154-cdfb-42d0-8e42-39e210e980b4/filesets/c5300f8b-f5ff-4010-9371-edc33d489143/ref_pbmc_clean_celltypist_model_AIFI_L2_2024-04-19.pkl) | `data/models/celltypist/ref_pbmc_clean_celltypist_model_AIFI_L2_2024-04-19.pkl` |
+| Processed Kang PBMC object (GSE96583) | [Figshare file used by the release](https://api.figshare.com/v2/file/download/34464122) | `data/raw/kang_2018.h5ad` |
+| Mouse-spleen RNA | [MultiMAP RNA](ftp://ngs.sanger.ac.uk/production/teichmann/MultiMAP/rna.h5ad) | `data/raw/rna.h5ad` |
+| Mouse-spleen ATAC gene activity | [MultiMAP gene activity](ftp://ngs.sanger.ac.uk/production/teichmann/MultiMAP/atac-genes.h5ad) | `data/raw/atac-genes.h5ad` |
+| Mouse-spleen ATAC peaks | [MultiMAP peaks](ftp://ngs.sanger.ac.uk/production/teichmann/MultiMAP/atac-peaks.h5ad) | `data/raw/atac-peaks.h5ad` |
 
-No HDF5-family biological-data object is included in this repository. The
-processed HIHA and PBMC objects and the mouse-spleen inputs remain
-acquisition-only external dependencies. Their identities and acquisition
-records are maintained in
-`paper-release/provenance/external_dependencies.csv`.
+The mouse-spleen studies are E-MTAB-9769 and E-MTAB-6714. Use an FTP-capable client for the recorded MultiMAP URLs. Compare downloaded files with the SHA-256 values in the manifest, for example with `shasum -a 256 data/raw/kang_2018.h5ad`.
 
-The manuscript uses the Allen Institute Human Immune Health Atlas, the
-Kang PBMC dataset (GEO GSE96583; the analyzed processed object is distributed
-through Pertpy), and the mouse-spleen RNA/ATAC inputs distributed with
-MultiMAP (E-MTAB-9769 and E-MTAB-6714). The provenance CSV identifies the
-specific input paths, acquisition records, preparation steps and checksums.
-Rows describing locally derived inputs are not direct download links.
+### Obtain the required reproduction resources
 
-Public access to the original studies does not supply this project's generated
-Supplementary Data 1–4. Those files comprise the analysis/environment index,
-HIHA results, PBMC results and mouse-spleen results, respectively; their
-delivery location remains pending. No raw biological data are redistributed
-by this documentation update.
+The artifact-regeneration workflow also requires resources whose public download locations are still pending:
 
-## Licensing
+- **Complete evidence archive:** extract it so that `evidence/release/` contains `units/`, `code/`, and `provenance/`, including `provenance/checksums.sha256`. Set `--release-root` to that directory, not this source checkout.
+- **Recorded processed HIHA object:** place it at `data/derived/hiha_dc/human_immune_health_atlas_dc.with_recomputed_AIFI_L2_score.h5ad`. The workflow requires the exact file identity recorded in the manifest. The raw HIHA download cannot substitute for it. The manifest names `scripts/recompute_aifi_l2_score.py` as its preparation script, but that script is absent from this source checkout; this preparation route is not yet self-contained.
 
-Software is licensed under the MIT License in `LICENSE`. Author-created
-documentation and paper-facing evidence are licensed under CC BY 4.0. See
-`LICENSE_SCOPE.md` for scope and exclusions. Copyright-holder and institution
-fields remain private-draft TODOs and must be completed before publication.
+Until these resources are accessible, a fresh clone plus the downloads above cannot reproduce all results.
 
-## Citation and contact
+### Regenerate results from saved fits
 
-Manuscript authors, in order:
+Once those resources are in place, run:
 
-1. **Zhili Lin** — Department of Hematology, The First Affiliated Hospital of
-   Wenzhou Medical University, Wenzhou, Zhejiang, China.
-2. **Zhouxiang Jin (corresponding author)** — Department of Hepatobiliary
-   Surgery, The Second Affiliated Hospital and Yuying Children's Hospital of
-   Wenzhou Medical University, Wenzhou, Zhejiang, China.
+```bash
+uv run python -m paper-release.workflows.reproduce \
+  --release-root evidence/release \
+  --output-root reproduced \
+  --unit all \
+  --pbmc-source-h5ad data/raw/kang_2018.h5ad \
+  --hiha-source-h5ad data/derived/hiha_dc/human_immune_health_atlas_dc.with_recomputed_AIFI_L2_score.h5ad
+```
 
-Correspondence: **wzjinzx@163.com**. Citation metadata are provided in
-[CITATION.cff](CITATION.cff). No publication DOI or accepted-publication status
-is claimed. The manuscript author list does not establish software copyright
-ownership; copyright-holder and institution fields still require confirmation.
+The `reproduced/` directory must not already exist and must be outside the extracted evidence archive. Outputs are written under `reproduced/<unit_id>/`; inspect `reproduced/unit_status.csv` and `reproduced/session_report.md` for completion and any failures. This command regenerates artifacts from saved fits; it does not refit the models. The mouse-spleen regeneration units consume packaged artifacts rather than the raw downloads. Passing the code tests alone does not establish reproduction of manuscript results.
+
+## License and citation
+
+Code: [MIT](LICENSE). Author-created documentation and evidence: [CC BY 4.0](LICENSES/CC-BY-4.0.txt), subject to the [license scope and exclusions](LICENSE_SCOPE.md).
+
+Authors: Zhili Lin and Zhouxiang Jin. See [CITATION.cff](CITATION.cff) for citation metadata; publication details and DOI are pending.
+
+Contact: Zhili Lin — [lzlwork12138@163.com](mailto:lzlwork12138@163.com).
