@@ -1,25 +1,18 @@
 # License scope
 
-This private draft uses the following license allocation. The copyright-holder
-and institution fields must be completed before publication.
-
 ## Software
 
 Source code, executable workflow scripts, tests, and software configuration are
-licensed under the MIT License in `LICENSE`.
-
-- Copyright holder: `TODO: COPYRIGHT HOLDER`
-- Institution: `TODO: INSTITUTION`
+licensed under the [MIT License](LICENSE).
 
 ## Author-created documentation and evidence
 
 Author-created documentation, figures, tables, provenance metadata, and
 paper-facing scientific evidence are licensed under the Creative Commons
 Attribution 4.0 International license (CC BY 4.0), whose legal text is provided
-in `LICENSES/CC-BY-4.0.txt`.
+in [LICENSES/CC-BY-4.0.txt](LICENSES/CC-BY-4.0.txt).
 
-Attribution details, including the final author list and citation, will be
-recorded in `CITATION.cff` before publication.
+Author and citation metadata are recorded in [CITATION.cff](CITATION.cff).
 
 ## Exclusions
 

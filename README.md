@@ -87,12 +87,25 @@ Download each file below and save it at the indicated path, relative to the repo
 
 The mouse-spleen studies are E-MTAB-9769 and E-MTAB-6714. Use an FTP-capable client for the recorded MultiMAP URLs. Compare downloaded files with the SHA-256 values in the manifest, for example with `shasum -a 256 data/raw/kang_2018.h5ad`.
 
+### Prepare HIHA prediction scores
+
+After downloading the HIHA object and CellTypist model above, run:
+
+```bash
+uv run python scripts/recompute_aifi_l2_score.py \
+  --input-h5ad data/raw/human_immune_health_atlas_dc.h5ad \
+  --model-pkl data/models/celltypist/ref_pbmc_clean_celltypist_model_AIFI_L2_2024-04-19.pkl \
+  --output-h5ad data/derived/hiha_dc/hiha_dc.rebuilt.h5ad
+```
+
+This writes a new AnnData object containing predicted Level-2 labels and scores, plus a per-cell TSV report beside it. Use a new output filename for each run. The script records a creation timestamp and software versions, so its output is not byte-identical to the historical processed file required by the archive's strict checksum validation. Keep the rebuilt file separate from that historical input; this preparation command does not close the archive-reproduction requirement below.
+
 ### Obtain the required reproduction resources
 
 The artifact-regeneration workflow also requires resources whose public download locations are still pending:
 
 - **Complete evidence archive:** extract it so that `evidence/release/` contains `units/`, `code/`, and `provenance/`, including `provenance/checksums.sha256`. Set `--release-root` to that directory, not this source checkout.
-- **Recorded processed HIHA object:** place it at `data/derived/hiha_dc/human_immune_health_atlas_dc.with_recomputed_AIFI_L2_score.h5ad`. The workflow requires the exact file identity recorded in the manifest. The raw HIHA download cannot substitute for it. The manifest names `scripts/recompute_aifi_l2_score.py` as its preparation script, but that script is absent from this source checkout; this preparation route is not yet self-contained.
+- **Recorded processed HIHA object:** place it at `data/derived/hiha_dc/human_immune_health_atlas_dc.with_recomputed_AIFI_L2_score.h5ad`. The workflow requires the exact file identity recorded in the manifest. Neither the raw HIHA download nor a newly rebuilt file can substitute for it under the current checksum validation.
 
 Until these resources are accessible, a fresh clone plus the downloads above cannot reproduce all results.
 
